@@ -37,6 +37,16 @@ final class MinerKitTests: XCTestCase {
         }
         supervisor.start()
         wait(for: [twice], timeout: 15)
+        // The core's output is read as it arrives, on another thread: the
+        // second start can be seen before the first run's last lines are.
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            lock.lock()
+            let ready = events.count >= 5 && logs.contains { $0.contains("exited with status 3") }
+            lock.unlock()
+            if ready { break }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
         supervisor.stop()
 
         lock.lock()
