@@ -22,7 +22,7 @@ final class MinerKitTests: XCTestCase {
         """.write(to: fake, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
 
-        let supervisor = CoreSupervisor(options: .init(binary: fake, stateDirectory: dir, sshTarget: "127.0.0.1:1", vncTarget: "127.0.0.1:2"))
+        let supervisor = CoreSupervisor(options: .init(binary: fake, stateDirectory: dir, sshTarget: "127.0.0.1:1", vncTarget: "127.0.0.1:2", machine: MachineSize(cpuCount: 8, memoryGB: 12, diskGB: 140)))
         let lock = NSLock()
         var events: [CoreEvent] = []
         var logs: [String] = []
@@ -48,6 +48,7 @@ final class MinerKitTests: XCTestCase {
         XCTAssertEqual(first[2].lease, "l1")
         XCTAssertNotNil(first[2].endsAt)
         XCTAssertTrue(logs.contains { $0.contains("run -events -ssh-target 127.0.0.1:1 -vnc-target 127.0.0.1:2 -dir") }, "\(logs)")
+        XCTAssertTrue(logs.contains { $0.hasSuffix("-machine-cpus 8 -machine-memory-gb 12 -machine-disk-gb 140") }, "\(logs)")
         XCTAssertTrue(logs.contains { $0.contains("exited with status 3") })
     }
 

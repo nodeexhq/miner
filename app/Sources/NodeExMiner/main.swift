@@ -217,7 +217,8 @@ final class MinerModel: ObservableObject {
             binary: binary,
             stateDirectory: stateDirectory,
             sshTarget: "127.0.0.1:\(MachineController.sshPort)",
-            vncTarget: "127.0.0.1:\(MachineController.vncPort)"))
+            vncTarget: "127.0.0.1:\(MachineController.vncPort)",
+            machine: machines?.machineSize))
         supervisor.onRunning = { [weak self] running in Task { @MainActor in self?.coreRunning = running; if !running { self?.gate = "off" } } }
         supervisor.onLog = { [weak self] line in Task { @MainActor in self?.lastLog = line } }
         supervisor.onEvent = { [weak self] event in Task { @MainActor in self?.handle(event) } }

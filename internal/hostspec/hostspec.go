@@ -14,4 +14,10 @@ type HostSpecs struct {
 	DiskFreeGB  int    `json:"disk_free_gb"`
 	MacOS       string `json:"macos"`
 	HasBattery  bool   `json:"has_battery"`
+	// What a renter is given, when the node gives each lease a virtual
+	// machine of its own: less than the Mac has, since the host keeps some
+	// for itself. All zero for a node that forwards to the Mac itself.
+	MachineCPUCores int `json:"machine_cpu_cores,omitempty"`
+	MachineMemoryGB int `json:"machine_memory_gb,omitempty"`
+	MachineDiskGB   int `json:"machine_disk_gb,omitempty"`
 }

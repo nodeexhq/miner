@@ -38,6 +38,14 @@ public final class MachineController {
         self.helper = helper
     }
 
+    /// The size of the machine leases are given: this host's share of
+    /// cores and memory, and the disk the base machine was installed with.
+    /// Nil until there is a base machine.
+    public var machineSize: MachineSize? {
+        guard store.base.exists, let bytes = try? FileManager.default.attributesOfItem(atPath: store.base.disk.path)[.size] as? UInt64 else { return nil }
+        return MachineSize(cpuCount: resources.cpuCount, memoryGB: Int(resources.memoryBytes >> 30), diskGB: Int(bytes >> 30))
+    }
+
     /// Throws away whatever machine exists and starts a new one from the
     /// base. Called at launch and whenever a lease ends.
     public func renew() async {

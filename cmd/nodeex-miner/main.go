@@ -303,6 +303,9 @@ func cmdRun(args []string) error {
 	paused := fs.Bool("paused", false, "stay online but do not accept new leases")
 	sshTarget := fs.String("ssh-target", "127.0.0.1:22", "where renters' SSH connections are forwarded")
 	vncTarget := fs.String("vnc-target", "127.0.0.1:5900", "where renters' remote desktop connections are forwarded")
+	machineCPU := fs.Int("machine-cpus", 0, "cores of the virtual machine each lease is given (with -machine-memory-gb and -machine-disk-gb)")
+	machineMemory := fs.Int("machine-memory-gb", 0, "memory of that machine")
+	machineDisk := fs.Int("machine-disk-gb", 0, "disk of that machine")
 	events := fs.Bool("events", false, "write state changes to standard output as JSON lines, for a program that supervises the Miner")
 	fs.Parse(args)
 	emit := eventWriter(*events)
@@ -338,6 +341,11 @@ func cmdRun(args []string) error {
 			AcceptingLeases bool               `json:"accepting_leases"`
 			Host            hostspec.HostSpecs `json:"host"`
 		}{version, !*paused, hostinfo.Collect()}
+		// The market describes what a renter gets, so a node that gives
+		// each lease its own machine says how large that machine is.
+		if *machineCPU > 0 && *machineMemory > 0 && *machineDisk > 0 {
+			req.Host.MachineCPUCores, req.Host.MachineMemoryGB, req.Host.MachineDiskGB = *machineCPU, *machineMemory, *machineDisk
+		}
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		if err := call(cctx, id.API, priv, "POST", "/v1/nodes/"+id.NodeID+"/reports", req, nil); err != nil {

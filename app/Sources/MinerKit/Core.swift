@@ -30,12 +30,16 @@ public final class CoreSupervisor: @unchecked Sendable {
         /// Where the core forwards renters' connections.
         public var sshTarget: String
         public var vncTarget: String
+        /// The machine each lease is given, for the node to tell the
+        /// platform; nil if leases are not given a machine of their own.
+        public var machine: MachineSize?
 
-        public init(binary: URL, stateDirectory: URL? = nil, sshTarget: String = "127.0.0.1:22", vncTarget: String = "127.0.0.1:5900") {
+        public init(binary: URL, stateDirectory: URL? = nil, sshTarget: String = "127.0.0.1:22", vncTarget: String = "127.0.0.1:5900", machine: MachineSize? = nil) {
             self.binary = binary
             self.stateDirectory = stateDirectory
             self.sshTarget = sshTarget
             self.vncTarget = vncTarget
+            self.machine = machine
         }
     }
 
@@ -76,6 +80,9 @@ public final class CoreSupervisor: @unchecked Sendable {
         p.executableURL = options.binary
         var args = ["run", "-events", "-ssh-target", options.sshTarget, "-vnc-target", options.vncTarget]
         if let dir = options.stateDirectory { args += ["-dir", dir.path] }
+        if let m = options.machine {
+            args += ["-machine-cpus", String(m.cpuCount), "-machine-memory-gb", String(m.memoryGB), "-machine-disk-gb", String(m.diskGB)]
+        }
         p.arguments = args
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
@@ -158,5 +165,18 @@ final class LineBuffer: @unchecked Sendable {
             if let text = String(data: line, encoding: .utf8), !text.isEmpty { lines.append(text) }
         }
         return lines
+    }
+}
+
+/// How large the machine a renter gets is.
+public struct MachineSize: Sendable, Equatable {
+    public let cpuCount: Int
+    public let memoryGB: Int
+    public let diskGB: Int
+
+    public init(cpuCount: Int, memoryGB: Int, diskGB: Int) {
+        self.cpuCount = cpuCount
+        self.memoryGB = memoryGB
+        self.diskGB = diskGB
     }
 }
