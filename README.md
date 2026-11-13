@@ -65,8 +65,10 @@ never to the owner's own macOS.
 
 This is not finished and is not part of a release yet. It has been run on one Mac: a base machine was installed,
 a copy of it booted, SSH and screen sharing reached the guest through the app's ports, and the copy was destroyed and
-replaced when a lease ended. Preparing the base machine still takes manual steps inside the guest, and nothing yet
-creates the renter's account in it. Until the app ships, the command-line Miner forwards connections to the Mac
+replaced when a lease ended. The host can now prepare the base machine and install a renter's SSH keys in a
+running machine without anyone touching the guest, by writing to the stopped machine's disk and by logging in with a
+key only the host holds. What still takes a person is the guest's first-run setup, once per Mac, and the keys do
+not yet arrive from the platform. Until the app ships, the command-line Miner forwards connections to the Mac
 itself, as before.
 
 ```sh
@@ -74,6 +76,7 @@ app/scripts/bundle.sh        # builds app/dist/NodeEx Miner.app and app/dist/nod
 app/dist/nodeex-vm status
 app/dist/nodeex-vm install   # download macOS and install the base machine
 app/dist/nodeex-vm setup     # boot it in a window: create an account, turn on Remote Login and Screen Sharing, shut down
+app/dist/nodeex-vm provision # let the host log in to the base and use sudo there (no window, no clicks)
 app/dist/nodeex-vm run       # boot a fresh copy and print its address
 ```
 

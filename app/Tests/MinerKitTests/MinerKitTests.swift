@@ -133,3 +133,17 @@ func roundTrip(port: UInt16, send text: String) throws -> String {
     guard let reply, !reply.isEmpty else { throw RoundTripFailed() }
     return reply
 }
+
+final class ProvisioningTests: XCTestCase {
+    /// Only single-line OpenSSH public keys may reach authorized_keys.
+    func testOnlyPublicKeysAreAccepted() {
+        XCTAssertTrue(Provisioning.isPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGk5jv0mY0b8o0Jm1J0cK0v8pT9c2mQk0m0m0m0m0m0m renter@laptop"))
+        XCTAssertTrue(Provisioning.isPublicKey("ecdsa-sha2-nistp256 AAAAE2VjZHNh"))
+        XCTAssertFalse(Provisioning.isPublicKey("ssh-ed25519"))
+        XCTAssertFalse(Provisioning.isPublicKey("ssh-ed25519 not*base64"))
+        XCTAssertFalse(Provisioning.isPublicKey("command=\"rm -rf /\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5"))
+        XCTAssertFalse(Provisioning.isPublicKey("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5"))
+        XCTAssertFalse(Provisioning.isPublicKey("ssh-dss AAAAB3NzaC1kc3M="))
+        XCTAssertFalse(Provisioning.isPublicKey(""))
+    }
+}

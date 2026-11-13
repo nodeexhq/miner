@@ -7,6 +7,7 @@ import Virtualization
 //   nodeex-vm status           what is on disk
 //   nodeex-vm install          download macOS and install the base machine
 //   nodeex-vm setup            boot the base in a window, for first-run setup
+//   nodeex-vm provision        let the host log in to the base and use sudo there
 //   nodeex-vm run              boot a fresh copy of the base and print its address
 //
 // The program must be signed with the com.apple.security.virtualization
@@ -17,6 +18,9 @@ setvbuf(stdout, nil, _IOLBF, 0)
 
 let store = VMStore.standard
 let resources = VMResources.forThisHost()
+
+/// Machines this process started. A machine stops when nothing refers to it.
+@MainActor var running: [VMRunner] = []
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -83,10 +87,15 @@ func main() async {
             try await VMInstaller.install(image: image, into: store.base, resources: resources, progress: percent("installing"))
             print("installed. Next: nodeex-vm setup")
             exit(0)
+        case "provision":
+            let account = try Provisioning.prepareBase(store: store)
+            print("the base machine is prepared: the host can log in as \(account) and administrators have password-less sudo")
+            exit(0)
         case "setup":
             guard store.base.exists else { fail("\(VMError.noBaseImage)") }
             let runner = try VMRunner(bundle: store.base, resources: resources)
             runner.onStop = { _ in exit(0) }
+            running.append(runner)
             try await runner.start()
             showWindow(for: runner, title: "NodeEx base machine: finish setup, then shut it down")
             print("Set up the account, turn on Remote Login and Screen Sharing, then shut the machine down from its Apple menu.")
@@ -97,12 +106,27 @@ func main() async {
                 print("machine stopped\(error.map { ": \($0.localizedDescription)" } ?? "")")
                 exit(0)
             }
+            running.append(runner)
             try await runner.start()
             print("started a fresh copy of the base; waiting for its address")
-            print("address: \(try await runner.address())")
+            let address = try await runner.address()
+            print("address: \(address)")
+            if let at = CommandLine.arguments.firstIndex(of: "--authorize"), CommandLine.arguments.count > at + 1, let account = Provisioning.account(store: store) {
+                // nodeex-vm run --authorize FILE: let the public keys in FILE log in, as a renter's would.
+                let keys = try String(contentsOfFile: CommandLine.arguments[at + 1], encoding: .utf8).split(separator: "\n").map(String.init)
+                try Provisioning.authorize(renterKeys: keys, at: address, account: account, store: store)
+                print("authorized \(keys.count) key(s) for \(account)")
+            }
+            if let at = CommandLine.arguments.firstIndex(of: "--exec"), CommandLine.arguments.count > at + 2 {
+                // nodeex-vm run --exec ACCOUNT COMMAND: run a command in the guest and stop.
+                let output = try Provisioning.guest(CommandLine.arguments[at + 2], at: address, account: CommandLine.arguments[at + 1], store: store)
+                print(output, terminator: "")
+                await runner.stop()
+                exit(0)
+            }
             if CommandLine.arguments.contains("--window") { showWindow(for: runner, title: "NodeEx machine") }
         default:
-            fail("usage: nodeex-vm <status|install|setup|run [--window]>")
+            fail("usage: nodeex-vm <status|install|setup|provision|run [--window] [--exec ACCOUNT COMMAND]>")
         }
     } catch {
         fail("\(error)")

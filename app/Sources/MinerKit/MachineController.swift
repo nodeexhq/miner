@@ -28,6 +28,7 @@ public final class MachineController {
     private let vnc: Forwarder
     private var runner: VMRunner?
     private var generation = 0
+    private var wantedKeys: [String] = []
 
     public init(store: VMStore = .standard, resources: VMResources = .forThisHost()) throws {
         self.store = store
@@ -41,6 +42,8 @@ public final class MachineController {
     public func renew() async {
         generation += 1
         let mine = generation
+        // The next machine is for the next renter: the last one's keys go.
+        wantedKeys = []
         ssh.setTarget(host: nil, port: 0)
         vnc.setTarget(host: nil, port: 0)
         if let old = runner {
@@ -70,9 +73,30 @@ public final class MachineController {
             ssh.setTarget(host: address, port: 22)
             vnc.setTarget(host: address, port: 5900)
             state = .ready(address: address)
+            applyKeys()
         } catch {
             guard generation == mine else { return }
             state = .failed("\(error)")
+        }
+    }
+
+    /// Installs the renter's SSH keys in the machine that is running, in
+    /// place of any that were there. With no keys only the host can log in.
+    /// The keys are remembered and applied to a machine still starting.
+    public func authorize(renterKeys: [String]) {
+        wantedKeys = renterKeys
+        applyKeys()
+    }
+
+    private func applyKeys() {
+        guard case .ready(let address) = state, let account = Provisioning.account(store: store) else { return }
+        let keys = wantedKeys, store = store
+        Task.detached {
+            do {
+                try Provisioning.authorize(renterKeys: keys, at: address, account: account, store: store)
+            } catch {
+                NSLog("NodeEx: could not install the renter's keys: \(error)")
+            }
         }
     }
 
