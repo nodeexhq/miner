@@ -65,6 +65,9 @@ final class MinerModel: ObservableObject {
         case "lease_started":
             lease = event.lease
             leaseEnds = event.endsAt
+        case "lease_keys":
+            // The renter's way in to the machine this lease was given.
+            machines?.authorize(renterKeys: event.sshKeys ?? [])
         case "lease_ended":
             lease = nil
             leaseEnds = nil

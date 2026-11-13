@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -378,6 +379,7 @@ func cmdRun(args []string) error {
 	}
 
 	lastStatus := ""
+	lastKeys := ""
 	started := time.Now()
 	lastReached := time.Now()
 	isolated := false
@@ -385,8 +387,9 @@ func cmdRun(args []string) error {
 		var res struct {
 			Status string `json:"status"`
 			Lease  *struct {
-				ID     string    `json:"id"`
-				EndsAt time.Time `json:"ends_at"`
+				ID      string    `json:"id"`
+				EndsAt  time.Time `json:"ends_at"`
+				SSHKeys []string  `json:"ssh_keys"`
 			} `json:"lease"`
 		}
 		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -458,8 +461,9 @@ func cmdRun(args []string) error {
 			}
 		}
 		lease, endsAt := "", time.Time{}
+		var keys []string
 		if res.Lease != nil {
-			lease, endsAt = res.Lease.ID, res.Lease.EndsAt
+			lease, endsAt, keys = res.Lease.ID, res.Lease.EndsAt, res.Lease.SSHKeys
 		}
 		if previous := state.set(lease, endsAt); previous != lease {
 			if previous != "" {
@@ -470,6 +474,12 @@ func cmdRun(args []string) error {
 				log.Printf("lease %s started, ends %s", lease, endsAt.Local().Format(time.DateTime))
 				emit(event{Event: "lease_started", Lease: lease, EndsAt: &endsAt})
 			}
+			lastKeys = ""
+		}
+		// The renter's keys can arrive, or change, after the lease starts.
+		if joined := strings.Join(keys, "\n"); lease != "" && joined != lastKeys {
+			lastKeys = joined
+			emit(event{Event: "lease_keys", Lease: lease, SSHKeys: append([]string{}, keys...)})
 		}
 	}
 

@@ -10,10 +10,12 @@ public struct CoreEvent: Decodable, Sendable {
     public let addr: String?
     public let lease: String?
     public let endsAt: Date?
+    public let sshKeys: [String]?
 
     enum CodingKeys: String, CodingKey {
         case event, state, node, addr, lease
         case endsAt = "ends_at"
+        case sshKeys = "ssh_keys"
     }
 }
 

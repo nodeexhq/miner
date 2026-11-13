@@ -14,6 +14,7 @@ import (
 //	{"event":"node","state":"active","node":"<id>"}
 //	{"event":"gate","state":"open","addr":"100.64.0.3"}      state: open | suspended
 //	{"event":"lease_started","lease":"<id>","ends_at":"..."}
+//	{"event":"lease_keys","lease":"<id>","ssh_keys":["ssh-ed25519 ..."]}   the renter's keys, whenever they change
 //	{"event":"lease_ended","lease":"<id>"}
 type event struct {
 	Event  string     `json:"event"`
@@ -22,6 +23,8 @@ type event struct {
 	Addr   string     `json:"addr,omitempty"`
 	Lease  string     `json:"lease,omitempty"`
 	EndsAt *time.Time `json:"ends_at,omitempty"`
+	// SSHKeys is set, possibly empty, on lease_keys only.
+	SSHKeys []string `json:"ssh_keys,omitempty"`
 }
 
 // eventWriter returns the function that reports events: to standard output
