@@ -289,6 +289,12 @@ struct SetupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if model.setupMachine == nil {
+                HStack(spacing: 10) {
+                    Image(nsImage: NSApplication.shared.applicationIconImage).resizable().frame(width: 36, height: 36)
+                    Text("NodeEx Miner").font(.headline)
+                }
+            }
             switch model.phase {
             case .checking, .finishing:
                 ProgressView(model.phase == .finishing ? "Preparing the machine" : "Checking this Mac")

@@ -20,7 +20,8 @@ BIN=$(cd "$APP_DIR" && swift build -c release --show-bin-path)
 
 mkdir -p "$DIST"
 [ ! -d "$BUNDLE" ] || mv "$BUNDLE" "$DIST/.old-$(date +%s)"
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Helpers"
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Helpers" "$BUNDLE/Contents/Resources"
+cp "$APP_DIR/Resources/AppIcon.icns" "$BUNDLE/Contents/Resources/AppIcon.icns"
 cp "$BIN/NodeExMiner" "$BUNDLE/Contents/MacOS/NodeExMiner"
 (cd "$REPO" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
   -o "$BUNDLE/Contents/Helpers/nodeex-miner" ./cmd/nodeex-miner)
@@ -37,6 +38,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 	<key>CFBundleDisplayName</key><string>NodeEx Miner</string>
 	<key>CFBundleIdentifier</key><string>com.nodeex.miner</string>
 	<key>CFBundleExecutable</key><string>NodeExMiner</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>${VERSION#v}</string>
 	<key>CFBundleVersion</key><string>${VERSION#v}</string>
