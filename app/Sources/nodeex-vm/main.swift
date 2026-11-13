@@ -12,6 +12,9 @@ import Virtualization
 // The program must be signed with the com.apple.security.virtualization
 // entitlement (scripts/bundle.sh does it).
 
+// Progress lines must appear as they happen, also when output is a file.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 let store = VMStore.standard
 let resources = VMResources.forThisHost()
 

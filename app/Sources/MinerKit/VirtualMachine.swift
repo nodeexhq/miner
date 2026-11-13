@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Virtualization
 
 /// Where the virtual machines live on disk.
@@ -83,7 +84,13 @@ public struct VMResources: Sendable {
         let gb: UInt64 = 1 << 30
         let cpu = max(VZVirtualMachineConfiguration.minimumAllowedCPUCount, min(VZVirtualMachineConfiguration.maximumAllowedCPUCount, cores - 2))
         let mem = max(VZVirtualMachineConfiguration.minimumAllowedMemorySize, min(VZVirtualMachineConfiguration.maximumAllowedMemorySize, memory > 8 * gb ? memory - 4 * gb : memory / 2))
-        return VMResources(cpuCount: cpu, memoryBytes: mem, diskBytes: diskGB * gb)
+        var resources = VMResources(cpuCount: cpu, memoryBytes: mem, diskBytes: diskGB * gb)
+        // On a Mac that is also somebody's workstation, give the machine
+        // less than everything: NODEEX_VM_CPUS and NODEEX_VM_MEMORY_GB.
+        let env = ProcessInfo.processInfo.environment
+        if let cpus = env["NODEEX_VM_CPUS"].flatMap(Int.init), cpus >= 1 { resources.cpuCount = min(cpus, cpu) }
+        if let limit = env["NODEEX_VM_MEMORY_GB"].flatMap(UInt64.init), limit >= 4 { resources.memoryBytes = min(limit * gb, mem) }
+        return resources
     }
 }
 
@@ -229,16 +236,43 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
     }
 
     /// The guest's address on the host's NAT network, read from the DHCP
-    /// leases macOS keeps. It appears some seconds after the guest boots.
+    /// leases macOS keeps, once the guest's SSH port answers there. That
+    /// takes some seconds after the guest boots.
     public func address(timeout: TimeInterval = 180) async throws -> String {
         guard let text = try? String(contentsOf: bundle.macAddress, encoding: .utf8) else { throw VMError.damagedBundle("MAC address") }
         let wanted = Self.normalize(text)
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let found = Self.leasedAddress(for: wanted) { return found }
+            // A lease can be left over from the last machine with this
+            // MAC address, so the address counts only once the guest
+            // answers on it.
+            if let found = Self.leasedAddress(for: wanted), await Self.answers(found, port: 22) { return found }
             try await Task.sleep(nanoseconds: 2_000_000_000)
         }
         throw VMError.noAddress
+    }
+
+    /// Whether something accepts a TCP connection at host:port within two
+    /// seconds.
+    nonisolated static func answers(_ host: String, port: UInt16) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+            let once = Once()
+            let finish: @Sendable (Bool) -> Void = { ok in
+                guard once.first() else { return }
+                connection.cancel()
+                continuation.resume(returning: ok)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: finish(true)
+                case .failed, .cancelled: finish(false)
+                default: break
+                }
+            }
+            connection.start(queue: .global())
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { finish(false) }
+        }
     }
 
     /// /var/db/dhcpd_leases writes each octet without its leading zero
@@ -272,5 +306,19 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
 
     public nonisolated func virtualMachine(_ virtualMachine: VZVirtualMachine, didStopWithError error: Error) {
         Task { @MainActor in self.onStop?(error) }
+    }
+}
+
+/// Lets exactly one caller through.
+final class Once: @unchecked Sendable {
+    private var done = false
+    private let lock = NSLock()
+
+    func first() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }

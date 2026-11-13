@@ -63,14 +63,22 @@ per-lease virtual machines are being built: each renter is to get a fresh macOS 
 image, which is destroyed when the lease ends and replaced with a new copy. Renters are forwarded to that machine and
 never to the owner's own macOS.
 
-This is not finished and is not part of a release yet. The code that creates, starts and replaces machines is
-written and compiles; it has not yet been run against a real guest. Until it has, the command-line Miner forwards
-connections to the Mac itself, as before.
+This is not finished and is not part of a release yet. It has been run on one Mac: a base machine was installed,
+a copy of it booted, SSH and screen sharing reached the guest through the app's ports, and the copy was destroyed and
+replaced when a lease ended. Preparing the base machine still takes manual steps inside the guest, and nothing yet
+creates the renter's account in it. Until the app ships, the command-line Miner forwards connections to the Mac
+itself, as before.
 
 ```sh
 app/scripts/bundle.sh        # builds app/dist/NodeEx Miner.app and app/dist/nodeex-vm
 app/dist/nodeex-vm status
+app/dist/nodeex-vm install   # download macOS and install the base machine
+app/dist/nodeex-vm setup     # boot it in a window: create an account, turn on Remote Login and Screen Sharing, shut down
+app/dist/nodeex-vm run       # boot a fresh copy and print its address
 ```
+
+`NODEEX_VM_CPUS` and `NODEEX_VM_MEMORY_GB` limit what a machine is given; by default it gets all but two cores and
+all but 4 GB of memory, which suits a Mac that does nothing else.
 
 `nodeex-miner run -events` writes state changes (node status, gate, lease started and ended) to standard output as
 JSON lines; that is how the app follows the Miner.
