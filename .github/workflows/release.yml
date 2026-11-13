@@ -1,6 +1,13 @@
 name: release
 
-# Pushing a tag such as v0.1.0 builds the Miner and publishes it as a release.
+# Pushing a tag such as v0.2.0 builds, signs, notarizes and publishes
+# everything owners download: the command-line Miner and the macOS app, with
+# the app's update feed pointed at the new version. Nothing is done by hand.
+#
+# The signing material is in the organization's secrets:
+#   MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD   the Developer ID certificate
+#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD  for Apple's notary service
+#   SPARKLE_PRIVATE_KEY                          signs the app's updates
 on:
   push:
     tags: ["v*"]
@@ -8,30 +15,67 @@ on:
 permissions:
   contents: write
 
+concurrency: release
+
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
+    env:
+      TAG: ${{ github.ref_name }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The build number is the count of commits, and the tag names the version.
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: go test -count=1 ./...
-      - name: Build
+      - run: cd vmnet && go test -count=1 ./...
+      - run: swift test --package-path app
+
+      - name: Signing certificate
         env:
-          CGO_ENABLED: "0"
-          TAG: ${{ github.ref_name }}
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: echo "SIGN_IDENTITY=$(scripts/ci-signing.sh)" >> "$GITHUB_ENV"
+
+      - name: Command-line Miner
         run: |
           mkdir -p dist/nodeex-miner
-          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$TAG" \
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$TAG" \
             -o dist/nodeex-miner/nodeex-miner ./cmd/nodeex-miner
+          scripts/sign-binary.sh dist/nodeex-miner/nodeex-miner
           cp LICENSE README.md dist/nodeex-miner/
           tar -C dist -czf "dist/nodeex-miner_${TAG}_macos_arm64.tar.gz" nodeex-miner
-          cd dist && sha256sum *.tar.gz > SHA256SUMS
+          (cd dist && shasum -a 256 *.tar.gz > SHA256SUMS)
+
+      - name: The app
+        run: VERSION="$TAG" app/scripts/package.sh
+
       - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
         run: |
           gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NodeEx Miner $TAG" \
-            --notes "For macOS on Apple silicon. The build is signed and notarized shortly after the release appears; until then macOS will ask before running it. Verify the download against SHA256SUMS."
+            --notes "The command-line Miner and the NodeEx Miner app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
+
+      - name: Update feed
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$RUNNER_TEMP/sparkle.key"
+          SPARKLE_KEY_FILE="$RUNNER_TEMP/sparkle.key" app/scripts/publish.sh "$TAG"
+          rm -f "$RUNNER_TEMP/sparkle.key"
+          # Installed apps read the feed from the main branch.
+          cp app/appcast.xml "$RUNNER_TEMP/appcast.xml"
+          git fetch -q origin main
+          git checkout -q -f -B main origin/main
+          cp "$RUNNER_TEMP/appcast.xml" app/appcast.xml
+          git config user.name "NodeEx"
+          git config user.email "hello@nodeex.com"
+          git add app/appcast.xml
+          git commit -q -m "Update feed: $TAG"
+          git push -q origin main

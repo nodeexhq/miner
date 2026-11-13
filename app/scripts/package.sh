@@ -26,7 +26,14 @@ hdiutil create -quiet -volname "NodeEx Miner" -srcfolder "$STAGE" -fs HFS+ -form
 codesign --force --timestamp -s "$SIGN_IDENTITY" "$DMG"
 
 echo "notarizing $(basename "$DMG")"
-xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait | tee "$STAGE/notary.log" | grep -E "status:" | tail -1
+# On a developer's Mac the notary credentials are a keychain profile; in CI
+# they come from the environment (APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD).
+if [ -n "${APPLE_ID:-}" ]; then
+  xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait > "$STAGE/notary.log"
+else
+  xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait > "$STAGE/notary.log"
+fi
+grep -E "status:" "$STAGE/notary.log" | tail -1
 grep -q "status: Accepted" "$STAGE/notary.log"
 xcrun stapler staple -q "$DMG"
 xcrun stapler validate -q "$DMG"

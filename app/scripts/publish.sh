@@ -14,7 +14,13 @@ REPO=$(cd "$APP_DIR/.." && pwd)
 DMG="$APP_DIR/dist/NodeEx-Miner-$TAG.dmg"
 [ -f "$DMG" ] || { echo "no $DMG: run package.sh with the tag checked out" >&2; exit 1; }
 BUILD=$(git -C "$REPO" rev-list --count "$TAG")
-SIGNATURE=$("$APP_DIR/.build/artifacts/sparkle/Sparkle/bin/sign_update" --account nodeex-miner "$DMG")
+# The update-signing key is in the keychain on a developer's Mac, and in a
+# file named by SPARKLE_KEY_FILE in CI.
+if [ -n "${SPARKLE_KEY_FILE:-}" ]; then
+  SIGNATURE=$("$APP_DIR/.build/artifacts/sparkle/Sparkle/bin/sign_update" --ed-key-file "$SPARKLE_KEY_FILE" "$DMG")
+else
+  SIGNATURE=$("$APP_DIR/.build/artifacts/sparkle/Sparkle/bin/sign_update" --account nodeex-miner "$DMG")
+fi
 gh release upload "$TAG" -R nodeexhq/miner "$DMG" "$DMG.sha256" --clobber
 cat > "$APP_DIR/appcast.xml" <<FEED
 <?xml version="1.0" encoding="utf-8"?>
