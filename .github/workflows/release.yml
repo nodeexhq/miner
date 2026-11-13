@@ -1,0 +1,37 @@
+name: release
+
+# Pushing a tag such as v0.1.0 builds the Miner and publishes it as a release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -count=1 ./...
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist/nodeex-miner
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$TAG" \
+            -o dist/nodeex-miner/nodeex-miner ./cmd/nodeex-miner
+          cp LICENSE README.md dist/nodeex-miner/
+          tar -C dist -czf "dist/nodeex-miner_${TAG}_macos_arm64.tar.gz" nodeex-miner
+          cd dist && sha256sum *.tar.gz > SHA256SUMS
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --title "NodeEx Miner $TAG" \
+            --notes "Unsigned build for macOS on Apple silicon. Verify the download against SHA256SUMS. macOS will ask before running it; see the README."
