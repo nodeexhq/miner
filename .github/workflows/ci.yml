@@ -26,3 +26,11 @@ jobs:
           for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
             GOOS=${t%/*} GOARCH=${t#*/} go build ./gate ./leasetoken ./overlay ./tunnel
           done
+
+  # The macOS app around the Miner (app/): Swift, so it builds on a Mac.
+  app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build --package-path app
+      - run: swift test --package-path app

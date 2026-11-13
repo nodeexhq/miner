@@ -56,6 +56,25 @@ node in service in the [quick start](https://nodeex.com/docs/miners/quickstart).
 While a lease is running, the renter has a login on the machine. Contribute a Mac you do not otherwise use: a new or
 freshly erased one is recommended. The Miner has nothing to do with cryptocurrency mining.
 
+## The macOS app (in development)
+
+`app/` holds a menu-bar app that wraps the command-line Miner. It runs the Miner as a child process, and it is where
+per-lease virtual machines are being built: each renter is to get a fresh macOS virtual machine, a copy of a base
+image, which is destroyed when the lease ends and replaced with a new copy. Renters are forwarded to that machine and
+never to the owner's own macOS.
+
+This is not finished and is not part of a release yet. The code that creates, starts and replaces machines is
+written and compiles; it has not yet been run against a real guest. Until it has, the command-line Miner forwards
+connections to the Mac itself, as before.
+
+```sh
+app/scripts/bundle.sh        # builds app/dist/NodeEx Miner.app and app/dist/nodeex-vm
+app/dist/nodeex-vm status
+```
+
+`nodeex-miner run -events` writes state changes (node status, gate, lease started and ended) to standard output as
+JSON lines; that is how the app follows the Miner.
+
 ## Layout
 
 | Path | What |
@@ -66,6 +85,7 @@ freshly erased one is recommended. The Miner has nothing to do with cryptocurren
 | `overlay` | Joining the overlay network |
 | `tunnel` | TCP forwarding |
 | `internal/` | Device signatures, hardware detection, the minimum requirements |
+| `app/` | The macOS menu-bar app and virtual machines (Swift, in development) |
 
 [NodeEx Connect](https://github.com/nodeexhq/connect), the renter's client, uses the first four.
 

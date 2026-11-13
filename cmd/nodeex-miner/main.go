@@ -302,7 +302,9 @@ func cmdRun(args []string) error {
 	paused := fs.Bool("paused", false, "stay online but do not accept new leases")
 	sshTarget := fs.String("ssh-target", "127.0.0.1:22", "where renters' SSH connections are forwarded")
 	vncTarget := fs.String("vnc-target", "127.0.0.1:5900", "where renters' remote desktop connections are forwarded")
+	events := fs.Bool("events", false, "write state changes to standard output as JSON lines, for a program that supervises the Miner")
 	fs.Parse(args)
+	emit := eventWriter(*events)
 
 	id, err := loadIdentity(*dir)
 	if err != nil {
@@ -362,6 +364,7 @@ func cmdRun(args []string) error {
 		}
 		srv, myAddr = joined, addr
 		log.Printf("gate listening on %s:%d (ssh -> %s, vnc -> %s)", myAddr, key.GatePort, *sshTarget, *vncTarget)
+		emit(event{Event: "gate", State: "open", Addr: myAddr})
 		go func() {
 			if err := serveGate(ctx, ln, id, state, gateTargets(*sshTarget, *vncTarget)); err != nil {
 				log.Printf("gate stopped: %v", err)
@@ -430,6 +433,7 @@ func cmdRun(args []string) error {
 			if time.Since(lastReached) > isolationLimit && state.suspend() {
 				isolated = true
 				log.Printf("no contact with the platform for %s; remote access is suspended until it returns", isolationLimit)
+				emit(event{Event: "gate", State: "suspended", Addr: myAddr})
 			}
 			return
 		}
@@ -437,10 +441,12 @@ func cmdRun(args []string) error {
 		if isolated {
 			isolated = false
 			log.Printf("contact with the platform restored; remote access resumes")
+			emit(event{Event: "gate", State: "open", Addr: myAddr})
 		}
 		changed := res.Status != lastStatus
 		if changed {
 			log.Printf("node status: %s", res.Status)
+			emit(event{Event: "node", State: res.Status, Node: id.NodeID})
 			lastStatus = res.Status
 		}
 		// A node that was waiting for review when the Miner started could
@@ -458,9 +464,11 @@ func cmdRun(args []string) error {
 		if previous := state.set(lease, endsAt); previous != lease {
 			if previous != "" {
 				log.Printf("lease %s ended; its connections are closed", previous)
+				emit(event{Event: "lease_ended", Lease: previous})
 			}
 			if lease != "" {
 				log.Printf("lease %s started, ends %s", lease, endsAt.Local().Format(time.DateTime))
+				emit(event{Event: "lease_started", Lease: lease, EndsAt: &endsAt})
 			}
 		}
 	}
