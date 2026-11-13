@@ -90,3 +90,14 @@ final class ProvisioningTests: XCTestCase {
         XCTAssertFalse(Provisioning.isPublicKey(""))
     }
 }
+
+final class CoreCLITests: XCTestCase {
+    /// A refusal shows the requirements that were not met, not the core's
+    /// closing line.
+    func testRefusalNamesTheReasons() {
+        let refused = CoreCLI.Result(status: 1, output: "this machine: MacBook Pro\ndoes NOT meet the minimum requirements:\n  - laptops are not accepted\n  - at least 100 GB of free disk is needed\n", errors: "nodeex-miner: not enrolling\n")
+        XCTAssertEqual(refused.message, "This Mac cannot be a node:\n• laptops are not accepted\n• at least 100 GB of free disk is needed")
+        let other = CoreCLI.Result(status: 1, output: "this machine: Mac mini\nmeets the minimum requirements to be a NodeEx node\n", errors: "nodeex-miner: POST /v1/nodes/enroll: this enroll code has been used (token_used)\n")
+        XCTAssertEqual(other.message, "POST /v1/nodes/enroll: this enroll code has been used (token_used)")
+    }
+}

@@ -18,8 +18,17 @@ public struct CoreCLI: Sendable {
         public var succeeded: Bool { status == 0 }
         /// The last line the core wrote, which is its verdict.
         public var message: String {
+            // The core lists unmet requirements on standard output, one per
+            // line after a dash, and only then gives up: those lines say
+            // why, where its last line says only that it did.
+            let reasons = output.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.hasPrefix("- ") }.map { String($0.dropFirst(2)) }
+            if !reasons.isEmpty {
+                return "This Mac cannot be a node:\n" + reasons.map { "• " + $0 }.joined(separator: "\n")
+            }
             let text = errors.isEmpty ? output : errors
-            return text.split(separator: "\n").last.map(String.init) ?? ""
+            let last = text.split(separator: "\n").last.map(String.init) ?? ""
+            // "nodeex-miner: ..." is how the core prefixes its errors.
+            return last.hasPrefix("nodeex-miner: ") ? String(last.dropFirst("nodeex-miner: ".count)) : last
         }
     }
 
