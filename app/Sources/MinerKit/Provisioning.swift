@@ -119,12 +119,33 @@ public enum Provisioning {
         ], input: input)
     }
 
-    /// Makes exactly these keys the renter's way in, beside the host's own.
-    /// An empty list leaves only the host's key: nobody else can log in.
+    /// The account a renter gets in the machine. It is made for the lease,
+    /// apart from the account the host manages the machine with, so the
+    /// renter can be given its password without learning the host's.
+    public static let renterAccount = "renter"
+
+    /// Makes exactly these keys the renter's way in to a running machine,
+    /// creating the renter's account the first time. An empty list leaves
+    /// the account with no keys: only the host can log in.
+    ///
+    /// The account starts with a random password nobody keeps. A new
+    /// account's password can be reset by an administrator, which is how
+    /// the renter's own client gives it one for remote desktop.
     public static func authorize(renterKeys: [String], at address: String, account: String, store: VMStore) throws {
-        let host = try String(contentsOf: try hostKey(store: store).appendingPathExtension("pub"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-        let keys = ([host] + renterKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(isPublicKey)).joined(separator: "\n") + "\n"
-        try guest("umask 077 && cat > ~/.ssh/authorized_keys.new && mv ~/.ssh/authorized_keys.new ~/.ssh/authorized_keys", at: address, account: account, store: store, input: keys)
+        let keys = renterKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(isPublicKey).joined(separator: "\n") + "\n"
+        let user = renterAccount
+        let script = """
+        set -e
+        if ! /usr/bin/id \(user) >/dev/null 2>&1; then
+          sudo -n /usr/sbin/sysadminctl -addUser \(user) -fullName Renter -admin -password "$(/usr/bin/openssl rand -base64 24)" >/dev/null 2>&1
+        fi
+        sudo -n /bin/mkdir -p /Users/\(user)/.ssh
+        sudo -n /usr/bin/tee /Users/\(user)/.ssh/authorized_keys >/dev/null
+        sudo -n /usr/sbin/chown -R \(user):staff /Users/\(user)/.ssh
+        sudo -n /bin/chmod 700 /Users/\(user)/.ssh
+        sudo -n /bin/chmod 600 /Users/\(user)/.ssh/authorized_keys
+        """
+        try guest(script, at: address, account: account, store: store, input: keys)
     }
 
     /// A single line that looks like an OpenSSH public key, so that nothing
