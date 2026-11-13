@@ -9,9 +9,9 @@ return: a node earns only when it is rented.
 
 ## Status
 
-Early access. The Miner is a command-line program. Release builds are **not yet signed or notarized**, so macOS will
-ask before running a downloaded binary; building from source avoids that. There is no installer, menu-bar app or
-automatic update yet.
+Early access. The Miner is a command-line program. Release builds are signed with a Developer ID and notarized by
+Apple, so macOS runs them without a warning; the first run needs a network connection for that check. There is no
+installer, menu-bar app or automatic update yet.
 
 ## Requirements
 
