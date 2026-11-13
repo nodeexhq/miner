@@ -81,7 +81,7 @@ final class MinerModel: ObservableObject {
         switch state {
         case .noBase: return "no base machine prepared"
         case .starting: return "starting a fresh machine"
-        case .ready(let address): return "ready at \(address)"
+        case .ready: return "ready, on its own filtered network"
         case .failed(let why): return "failed: \(why)"
         }
     }
@@ -141,5 +141,12 @@ struct MinerApp: App {
         }
     }
 }
+
+// Stopping the app by signal (a logout, a script) must stop what it
+// started, just as quitting from the menu does.
+signal(SIGTERM, SIG_IGN)
+let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+terminationSource.setEventHandler { NSApplication.shared.terminate(nil) }
+terminationSource.resume()
 
 MinerApp.main()

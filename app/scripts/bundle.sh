@@ -25,6 +25,8 @@ cp "$BIN/NodeExMiner" "$BUNDLE/Contents/MacOS/NodeExMiner"
 (cd "$REPO" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" \
   -o "$BUNDLE/Contents/Helpers/nodeex-miner" ./cmd/nodeex-miner)
 cp "$BIN/nodeex-vm" "$DIST/nodeex-vm"
+(cd "$REPO/vmnet" && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w" -o "$BUNDLE/Contents/Helpers/nodeex-vmnet" .)
+cp "$BUNDLE/Contents/Helpers/nodeex-vmnet" "$DIST/nodeex-vmnet"
 
 cat > "$BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -49,6 +51,8 @@ sign() {
   if [ "$IDENTITY" = "-" ]; then codesign --force -s - "$@"; else codesign --force --options runtime --timestamp -s "$IDENTITY" "$@"; fi
 }
 sign "$BUNDLE/Contents/Helpers/nodeex-miner"
+sign "$BUNDLE/Contents/Helpers/nodeex-vmnet"
+sign "$DIST/nodeex-vmnet"
 sign --entitlements "$APP_DIR/NodeExMiner.entitlements" "$BUNDLE"
 sign --entitlements "$APP_DIR/NodeExMiner.entitlements" "$DIST/nodeex-vm"
 codesign --verify --strict "$BUNDLE"

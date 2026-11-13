@@ -97,7 +97,7 @@ public struct VMResources: Sendable {
 /// Builds the framework's configuration for a machine on disk.
 @MainActor
 public enum VMConfiguration {
-    public static func make(bundle: VMBundle, resources: VMResources, display: Bool = true) throws -> VZVirtualMachineConfiguration {
+    public static func make(bundle: VMBundle, resources: VMResources, display: Bool = true, network guestNetwork: GuestNetwork? = nil) throws -> VZVirtualMachineConfiguration {
         guard let modelData = try? Data(contentsOf: bundle.hardwareModel), let model = VZMacHardwareModel(dataRepresentation: modelData) else {
             throw VMError.damagedBundle("hardware model")
         }
@@ -120,10 +120,16 @@ public enum VMConfiguration {
         let attachment = try VZDiskImageStorageDeviceAttachment(url: bundle.disk, readOnly: false)
         config.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: attachment)]
 
-        // NAT: the machine reaches the internet through the host and is not
-        // on the owner's local network as a peer.
+        // With a guest network every frame passes through the helper and
+        // its rules. Without one the machine gets the system's NAT, which
+        // lets it reach the owner's local network: for preparing the base
+        // machine only, never for a renter.
         let network = VZVirtioNetworkDeviceConfiguration()
-        network.attachment = VZNATNetworkDeviceAttachment()
+        if let guestNetwork {
+            network.attachment = VZFileHandleNetworkDeviceAttachment(fileHandle: guestNetwork.machineEnd)
+        } else {
+            network.attachment = VZNATNetworkDeviceAttachment()
+        }
         if let text = try? String(contentsOf: bundle.macAddress, encoding: .utf8), let mac = VZMACAddress(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) {
             network.macAddress = mac
         }
@@ -217,9 +223,13 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
     /// Called when the guest stops, whether it shut down or failed.
     public var onStop: ((Error?) -> Void)?
 
-    public init(bundle: VMBundle, resources: VMResources, display: Bool = true) throws {
+    /// The machine's filtered network, if it has one.
+    public let network: GuestNetwork?
+
+    public init(bundle: VMBundle, resources: VMResources, display: Bool = true, network: GuestNetwork? = nil) throws {
         self.bundle = bundle
-        machine = VZVirtualMachine(configuration: try VMConfiguration.make(bundle: bundle, resources: resources, display: display))
+        self.network = network
+        machine = VZVirtualMachine(configuration: try VMConfiguration.make(bundle: bundle, resources: resources, display: display, network: network))
         super.init()
         machine.delegate = self
     }
@@ -231,8 +241,26 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
     /// Cuts the power. The disk is thrown away after a lease, so there is
     /// nothing to shut down cleanly for.
     public func stop() async {
-        guard machine.canStop else { return }
-        try? await machine.stop()
+        if machine.canStop { try? await machine.stop() }
+        network?.stop()
+    }
+
+    /// Where the host reaches the machine's SSH: a loopback port when the
+    /// machine is on a guest network, its own address otherwise.
+    public struct Endpoint: Sendable, Equatable {
+        public let host: String
+        public let port: UInt16
+    }
+
+    /// Waits until the machine's SSH answers and returns where.
+    public func sshEndpoint(timeout: TimeInterval = 180) async throws -> Endpoint {
+        guard let network else { return Endpoint(host: try await address(timeout: timeout), port: 22) }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if await GuestNetwork.sshGreets(port: network.sshPort) { return Endpoint(host: "127.0.0.1", port: network.sshPort) }
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+        throw VMError.noAddress
     }
 
     /// The guest's address on the host's NAT network, read from the DHCP

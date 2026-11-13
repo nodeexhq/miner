@@ -111,11 +111,11 @@ public enum Provisioning {
     /// Runs a command in a running guest as its account, feeding it input,
     /// and returns what it printed.
     @discardableResult
-    public static func guest(_ command: String, at address: String, account: String, store: VMStore, input: String = "") throws -> String {
+    public static func guest(_ command: String, at endpoint: VMRunner.Endpoint, account: String, store: VMStore, input: String = "") throws -> String {
         try run("/usr/bin/ssh", [
             "-i", try hostKey(store: store).path, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10",
-            "\(account)@\(address)", command,
+            "-p", String(endpoint.port), "\(account)@\(endpoint.host)", command,
         ], input: input)
     }
 
@@ -131,7 +131,7 @@ public enum Provisioning {
     /// The account starts with a random password nobody keeps. A new
     /// account's password can be reset by an administrator, which is how
     /// the renter's own client gives it one for remote desktop.
-    public static func authorize(renterKeys: [String], at address: String, account: String, store: VMStore) throws {
+    public static func authorize(renterKeys: [String], at endpoint: VMRunner.Endpoint, account: String, store: VMStore) throws {
         let keys = renterKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(isPublicKey).joined(separator: "\n") + "\n"
         let user = renterAccount
         let script = """
@@ -145,7 +145,7 @@ public enum Provisioning {
         sudo -n /bin/chmod 700 /Users/\(user)/.ssh
         sudo -n /bin/chmod 600 /Users/\(user)/.ssh/authorized_keys
         """
-        try guest(script, at: address, account: account, store: store, input: keys)
+        try guest(script, at: endpoint, account: account, store: store, input: keys)
     }
 
     /// A single line that looks like an OpenSSH public key, so that nothing

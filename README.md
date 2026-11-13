@@ -83,6 +83,12 @@ app/dist/nodeex-vm run       # boot a fresh copy and print its address
 `NODEEX_VM_CPUS` and `NODEEX_VM_MEMORY_GB` limit what a machine is given; by default it gets all but two cores and
 all but 4 GB of memory, which suits a Mac that does nothing else.
 
+A renter's machine is not on the owner's network. Its network device is a socket held by `vmnet/`, a small
+user-space network that runs without root: it gives the machine an address, DNS and the internet, and refuses
+everything addressed to private ranges (the owner's local network, this Mac, the overlay) and to the mail ports 25,
+465 and 587. The rules are applied on the host, outside the machine, so the machine's administrator cannot lift
+them. `vmnet/policy.go` is the whole policy.
+
 `nodeex-miner run -events` writes state changes (node status, gate, lease started and ended) to standard output as
 JSON lines; that is how the app follows the Miner.
 
@@ -97,6 +103,7 @@ JSON lines; that is how the app follows the Miner.
 | `tunnel` | TCP forwarding |
 | `internal/` | Device signatures, hardware detection, the minimum requirements |
 | `app/` | The macOS menu-bar app and virtual machines (Swift, in development) |
+| `vmnet/` | The network of a renter's machine and its outbound rules (Go, a module of its own) |
 
 [NodeEx Connect](https://github.com/nodeexhq/connect), the renter's client, uses the first four.
 

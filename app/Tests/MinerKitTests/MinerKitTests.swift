@@ -75,63 +75,6 @@ final class MinerKitTests: XCTestCase {
         XCTAssertEqual(VMRunner.leasedAddress(for: mac, leases: leases), "192.168.64.5")
         XCTAssertNil(VMRunner.leasedAddress(for: VMRunner.normalize("00:00:00:00:00:01"), leases: leases))
     }
-
-    /// A connection to the loopback port reaches the current target, and
-    /// stops reaching anything once the target is cleared.
-    func testForwarderFollowsItsTarget() throws {
-        let echo = try NWEcho()
-        let forwarder = try Forwarder(port: 28022)
-        defer { forwarder.stop() }
-        forwarder.setTarget(host: "127.0.0.1", port: echo.port)
-        Thread.sleep(forTimeInterval: 0.3)
-        XCTAssertEqual(try roundTrip(port: 28022, send: "hello"), "hello")
-        forwarder.setTarget(host: nil, port: 0)
-        Thread.sleep(forTimeInterval: 0.3)
-        XCTAssertNil(try? roundTrip(port: 28022, send: "hello"))
-    }
-}
-
-import Network
-
-/// A TCP server on a free loopback port that sends back what it receives.
-final class NWEcho {
-    let listener: NWListener
-    var port: UInt16 { listener.port!.rawValue }
-
-    init() throws {
-        listener = try NWListener(using: .tcp, on: .any)
-        let ready = DispatchSemaphore(value: 0)
-        listener.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
-        listener.newConnectionHandler = { c in
-            c.start(queue: .global())
-            func loop() {
-                c.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, done, _ in
-                    if let data, !data.isEmpty { c.send(content: data, completion: .contentProcessed { _ in if !done { loop() } }) } else { c.cancel() }
-                }
-            }
-            loop()
-        }
-        listener.start(queue: .global())
-        _ = ready.wait(timeout: .now() + 5)
-    }
-}
-
-struct RoundTripFailed: Error {}
-
-func roundTrip(port: UInt16, send text: String) throws -> String {
-    let c = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
-    let done = DispatchSemaphore(value: 0)
-    var reply: String?
-    c.start(queue: .global())
-    c.send(content: Data(text.utf8), completion: .contentProcessed { _ in })
-    c.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
-        reply = data.flatMap { String(data: $0, encoding: .utf8) }
-        done.signal()
-    }
-    _ = done.wait(timeout: .now() + 3)
-    c.cancel()
-    guard let reply, !reply.isEmpty else { throw RoundTripFailed() }
-    return reply
 }
 
 final class ProvisioningTests: XCTestCase {

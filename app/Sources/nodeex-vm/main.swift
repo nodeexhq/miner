@@ -101,7 +101,14 @@ func main() async {
             print("Set up the account, turn on Remote Login and Screen Sharing, then shut the machine down from its Apple menu.")
         case "run":
             try store.resetCurrent()
-            let runner = try VMRunner(bundle: store.current, resources: resources)
+            // On the filtered network when the helper is there, as a
+            // renter's machine always is; --nat asks for the system's NAT.
+            var network: GuestNetwork?
+            if !CommandLine.arguments.contains("--nat"), let helper = GuestNetwork.helper() {
+                let mac = try String(contentsOf: store.current.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+                network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: MachineController.sshPort, vncPort: MachineController.vncPort)
+            }
+            let runner = try VMRunner(bundle: store.current, resources: resources, network: network)
             runner.onStop = { error in
                 print("machine stopped\(error.map { ": \($0.localizedDescription)" } ?? "")")
                 exit(0)
@@ -109,24 +116,24 @@ func main() async {
             running.append(runner)
             try await runner.start()
             print("started a fresh copy of the base; waiting for its address")
-            let address = try await runner.address()
-            print("address: \(address)")
+            let endpoint = try await runner.sshEndpoint()
+            print("ssh: \(endpoint.host) port \(endpoint.port)\(network == nil ? " (system NAT)" : " (filtered network)")")
             if let at = CommandLine.arguments.firstIndex(of: "--authorize"), CommandLine.arguments.count > at + 1, let account = Provisioning.account(store: store) {
                 // nodeex-vm run --authorize FILE: let the public keys in FILE log in, as a renter's would.
                 let keys = try String(contentsOfFile: CommandLine.arguments[at + 1], encoding: .utf8).split(separator: "\n").map(String.init)
-                try Provisioning.authorize(renterKeys: keys, at: address, account: account, store: store)
+                try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
                 print("authorized \(keys.count) key(s) for \(account)")
             }
             if let at = CommandLine.arguments.firstIndex(of: "--exec"), CommandLine.arguments.count > at + 2 {
                 // nodeex-vm run --exec ACCOUNT COMMAND: run a command in the guest and stop.
-                let output = try Provisioning.guest(CommandLine.arguments[at + 2], at: address, account: CommandLine.arguments[at + 1], store: store)
+                let output = try Provisioning.guest(CommandLine.arguments[at + 2], at: endpoint, account: CommandLine.arguments[at + 1], store: store)
                 print(output, terminator: "")
                 await runner.stop()
                 exit(0)
             }
             if CommandLine.arguments.contains("--window") { showWindow(for: runner, title: "NodeEx machine") }
         default:
-            fail("usage: nodeex-vm <status|install|setup|provision|run [--window] [--exec ACCOUNT COMMAND]>")
+            fail("usage: nodeex-vm <status|install|setup|provision|run [--nat] [--window] [--exec ACCOUNT COMMAND]>")
         }
     } catch {
         fail("\(error)")

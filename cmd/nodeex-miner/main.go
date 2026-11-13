@@ -306,6 +306,23 @@ func cmdRun(args []string) error {
 	events := fs.Bool("events", false, "write state changes to standard output as JSON lines, for a program that supervises the Miner")
 	fs.Parse(args)
 	emit := eventWriter(*events)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if *events {
+		// Supervised: if the supervisor dies, so does the machine it was
+		// running, and a Miner left behind would report a node that can
+		// serve nobody. Leave with it.
+		parent := os.Getppid()
+		go func() {
+			for range time.Tick(time.Second) {
+				if os.Getppid() != parent {
+					log.Printf("the supervising program is gone; stopping")
+					cancel()
+					return
+				}
+			}
+		}()
+	}
 
 	id, err := loadIdentity(*dir)
 	if err != nil {
@@ -315,9 +332,6 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
 	report := func() {
 		req := struct {
 			MinerVersion    string             `json:"miner_version"`

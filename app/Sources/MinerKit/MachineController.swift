@@ -8,7 +8,8 @@ public final class MachineController {
         /// No base machine has been prepared on this Mac.
         case noBase
         case starting
-        case ready(address: String)
+        /// The machine answers; the host reaches it at this loopback port.
+        case ready(sshPort: UInt16)
         case failed(String)
     }
 
@@ -24,8 +25,7 @@ public final class MachineController {
 
     private let store: VMStore
     private let resources: VMResources
-    private let ssh: Forwarder
-    private let vnc: Forwarder
+    private let helper: URL
     private var runner: VMRunner?
     private var generation = 0
     private var wantedKeys: [String] = []
@@ -33,8 +33,9 @@ public final class MachineController {
     public init(store: VMStore = .standard, resources: VMResources = .forThisHost()) throws {
         self.store = store
         self.resources = resources
-        ssh = try Forwarder(port: Self.sshPort)
-        vnc = try Forwarder(port: Self.vncPort)
+        // A renter's machine is never started on the unfiltered network.
+        guard let helper = GuestNetwork.helper() else { throw VMError.unsupportedHost("the nodeex-vmnet helper is missing") }
+        self.helper = helper
     }
 
     /// Throws away whatever machine exists and starts a new one from the
@@ -44,8 +45,6 @@ public final class MachineController {
         let mine = generation
         // The next machine is for the next renter: the last one's keys go.
         wantedKeys = []
-        ssh.setTarget(host: nil, port: 0)
-        vnc.setTarget(host: nil, port: 0)
         if let old = runner {
             runner = nil
             old.onStop = nil
@@ -58,7 +57,13 @@ public final class MachineController {
         state = .starting
         do {
             try store.resetCurrent()
-            let next = try VMRunner(bundle: store.current, resources: resources)
+            guard let mac = try? String(contentsOf: store.current.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
+                throw VMError.damagedBundle("MAC address")
+            }
+            // The helper forwards the two loopback ports for as long as this
+            // machine lives, and applies the outbound rules to it.
+            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort)
+            let next = try VMRunner(bundle: store.current, resources: resources, network: network)
             next.onStop = { [weak self] error in
                 guard let self, self.generation == mine else { return }
                 // The renter shut the machine down, or it crashed: either
@@ -68,11 +73,9 @@ public final class MachineController {
             }
             runner = next
             try await next.start()
-            let address = try await next.address()
+            let endpoint = try await next.sshEndpoint()
             guard generation == mine else { return }
-            ssh.setTarget(host: address, port: 22)
-            vnc.setTarget(host: address, port: 5900)
-            state = .ready(address: address)
+            state = .ready(sshPort: endpoint.port)
             applyKeys()
         } catch {
             guard generation == mine else { return }
@@ -89,11 +92,12 @@ public final class MachineController {
     }
 
     private func applyKeys() {
-        guard case .ready(let address) = state, let account = Provisioning.account(store: store) else { return }
+        guard case .ready(let port) = state, let account = Provisioning.account(store: store) else { return }
+        let endpoint = VMRunner.Endpoint(host: "127.0.0.1", port: port)
         let keys = wantedKeys, store = store
         Task.detached {
             do {
-                try Provisioning.authorize(renterKeys: keys, at: address, account: account, store: store)
+                try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
             } catch {
                 NSLog("NodeEx: could not install the renter's keys: \(error)")
             }
@@ -102,8 +106,6 @@ public final class MachineController {
 
     public func shutDown() async {
         generation += 1
-        ssh.stop()
-        vnc.stop()
         await runner?.stop()
         runner = nil
     }
