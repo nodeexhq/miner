@@ -27,6 +27,8 @@ import (
 	"syscall"
 	"time"
 
+	"tailscale.com/tsnet"
+
 	"github.com/nodeexhq/miner/internal/devicesig"
 	"github.com/nodeexhq/miner/internal/hostinfo"
 	"github.com/nodeexhq/miner/internal/hostspec"
@@ -40,6 +42,9 @@ const (
 	// The heartbeat is also how the Miner learns a lease was ended early, so
 	// this bounds how long a terminated renter stays connected.
 	heartbeatInterval = 15 * time.Second
+	// How often a Miner without remote access tries again to join the
+	// overlay.
+	gateRetryInterval = 5 * time.Minute
 	// isolationLimit is how long the Miner may be unable to reach the
 	// platform before it stops serving its lease. It matches the point at
 	// which the platform starts treating the node as offline.
@@ -324,25 +329,38 @@ func cmdRun(args []string) error {
 		}
 		log.Printf("report sent")
 	}
-	// Join the overlay and open the gate. If the platform has no overlay
-	// configured the Miner still reports and heartbeats, but nobody can
-	// connect to it.
+	// Join the overlay and open the gate. The platform gives a join key only
+	// to an approved node, and may have no overlay configured at all, so
+	// this can fail: the Miner then still reports and heartbeats, nobody can
+	// connect to it, and it tries again from the main loop.
 	state := &leaseState{}
 	myAddr := ""
-	jctx, jcancel := context.WithTimeout(ctx, 60*time.Second)
-	srv, key, err := joinOverlay(jctx, id, priv, *dir)
-	jcancel()
-	if err != nil {
-		log.Printf("overlay unavailable, running without remote access: %v", err)
-	} else {
-		defer srv.Close()
-		if myAddr, err = overlayAddr(ctx, srv); err != nil {
-			return err
+	var srv *tsnet.Server
+	defer func() {
+		if srv != nil {
+			srv.Close()
 		}
-		ln, err := gateListen(srv, key.GatePort)
+	}()
+	lastJoin := time.Time{}
+	openGate := func() error {
+		lastJoin = time.Now()
+		jctx, jcancel := context.WithTimeout(ctx, 60*time.Second)
+		joined, key, err := joinOverlay(jctx, id, priv, *dir)
+		jcancel()
 		if err != nil {
 			return err
 		}
+		addr, err := overlayAddr(ctx, joined)
+		if err != nil {
+			joined.Close()
+			return err
+		}
+		ln, err := gateListen(joined, key.GatePort)
+		if err != nil {
+			joined.Close()
+			return err
+		}
+		srv, myAddr = joined, addr
 		log.Printf("gate listening on %s:%d (ssh -> %s, vnc -> %s)", myAddr, key.GatePort, *sshTarget, *vncTarget)
 		go func() {
 			if err := serveGate(ctx, ln, id, state, gateTargets(*sshTarget, *vncTarget)); err != nil {
@@ -350,6 +368,10 @@ func cmdRun(args []string) error {
 				cancel()
 			}
 		}()
+		return nil
+	}
+	if err := openGate(); err != nil {
+		log.Printf("overlay unavailable, running without remote access for now: %v", err)
 	}
 
 	lastStatus := ""
@@ -416,9 +438,18 @@ func cmdRun(args []string) error {
 			isolated = false
 			log.Printf("contact with the platform restored; remote access resumes")
 		}
-		if res.Status != lastStatus {
+		changed := res.Status != lastStatus
+		if changed {
 			log.Printf("node status: %s", res.Status)
 			lastStatus = res.Status
+		}
+		// A node that was waiting for review when the Miner started could
+		// not join the overlay then. Join as soon as it is approved, and
+		// otherwise keep trying now and then.
+		if srv == nil && ctx.Err() == nil && (changed && res.Status == "active" || time.Since(lastJoin) > gateRetryInterval) {
+			if err := openGate(); err != nil {
+				log.Printf("overlay still unavailable: %v", err)
+			}
 		}
 		lease, endsAt := "", time.Time{}
 		if res.Lease != nil {
