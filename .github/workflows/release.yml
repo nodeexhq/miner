@@ -33,5 +33,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --title "NodeEx Miner $TAG" \
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NodeEx Miner $TAG" \
             --notes "Unsigned build for macOS on Apple silicon. Verify the download against SHA256SUMS. macOS will ask before running it; see the README."
