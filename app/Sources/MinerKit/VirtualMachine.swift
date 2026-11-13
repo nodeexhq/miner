@@ -26,6 +26,17 @@ public struct VMStore: Sendable {
     public var current: VMBundle { VMBundle(directory: root.appendingPathComponent("current", isDirectory: true)) }
     public var restoreImage: URL { root.appendingPathComponent("restore.ipsw") }
 
+    /// Free space on the machines' volume, in GB, counting the macOS image
+    /// as free: it is deleted once the base machine is installed.
+    public func freeGB() -> UInt64 {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let values = try? root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        var free = UInt64(max(0, values?.volumeAvailableCapacityForImportantUsage ?? 0))
+        if let image = try? fm.attributesOfItem(atPath: restoreImage.path)[.size] as? UInt64 { free += image }
+        return free >> 30
+    }
+
     /// Replaces the current machine with a fresh copy of the base. On APFS
     /// the copy shares the base's blocks, so it takes a moment and no extra
     /// space until the renter writes to it.
@@ -54,6 +65,7 @@ public enum VMError: Error, CustomStringConvertible {
     case unsupportedHost(String)
     case damagedBundle(String)
     case noAddress
+    case notEnoughDisk(freeGB: UInt64)
 
     public var description: String {
         switch self {
@@ -61,6 +73,7 @@ public enum VMError: Error, CustomStringConvertible {
         case .unsupportedHost(let why): return "this Mac cannot run the virtual machine: \(why)"
         case .damagedBundle(let what): return "the machine on disk is incomplete: \(what)"
         case .noAddress: return "the virtual machine did not get a network address"
+        case .notEnoughDisk(let free): return "there is not enough free disk space for a machine: \(free) GB free, and \(VMResources.baseGB + VMResources.hostReserveGB + VMResources.minimumDiskGB) GB are needed"
         }
     }
 }
@@ -76,8 +89,33 @@ public struct VMResources: Sendable {
         self.diskBytes = diskBytes
     }
 
+    /// What installing a machine costs on disk besides the machine's own
+    /// disk: the installed base, and room the host keeps for itself (system
+    /// updates, logs, the owner's own use).
+    static let baseGB: UInt64 = 25
+    static let hostReserveGB: UInt64 = 30
+    /// Below this the guest's macOS leaves a renter too little to work in.
+    static let minimumDiskGB: UInt64 = 80
+    static let maximumDiskGB: UInt64 = 500
+
+    /// The size of disk a new machine can be given on a volume with this
+    /// much free space, in GB, or nil if there is not enough.
+    ///
+    /// A lease's machine starts as a copy that shares the base's blocks, but
+    /// a renter may overwrite all of it: in the worst case the copy takes
+    /// its full size on top of the base. The size is therefore what is left
+    /// after the base and the host's reserve, rounded down to 10 GB, so a
+    /// renter who fills their disk cannot fill the owner's.
+    public static func diskGB(forFreeGB free: UInt64) -> UInt64? {
+        guard free > baseGB + hostReserveGB else { return nil }
+        let size = min((free - baseGB - hostReserveGB) / 10 * 10, maximumDiskGB)
+        return size >= minimumDiskGB ? size : nil
+    }
+
     /// What a rented machine gets: all but two of the host's cores and all
-    /// but 4 GB of its memory, within what the framework allows.
+    /// but 4 GB of its memory, within what the framework allows. diskGB is
+    /// used only when a machine is installed; a machine that exists keeps
+    /// the disk it was made with.
     public static func forThisHost(diskGB: UInt64 = 128) -> VMResources {
         let cores = ProcessInfo.processInfo.processorCount
         let memory = ProcessInfo.processInfo.physicalMemory
@@ -170,6 +208,14 @@ public enum VMInstaller {
     }
 
     /// Lays out an empty machine for the image and installs macOS on it.
+    /// The resources for a machine about to be installed in this store:
+    /// this host's cores and memory, and a disk sized to the free space.
+    public static func resources(for store: VMStore) throws -> VMResources {
+        let free = store.freeGB()
+        guard let disk = VMResources.diskGB(forFreeGB: free) else { throw VMError.notEnoughDisk(freeGB: free) }
+        return .forThisHost(diskGB: disk)
+    }
+
     public static func install(image: VZMacOSRestoreImage, into bundle: VMBundle, resources: VMResources, progress: @escaping @Sendable (Double) -> Void) async throws {
         guard let requirements = image.mostFeaturefulSupportedConfiguration else {
             throw VMError.unsupportedHost("this version of macOS cannot be virtualized here")

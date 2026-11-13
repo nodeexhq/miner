@@ -78,13 +78,21 @@ func main() async {
             print("machines: \(store.root.path)")
             print("restore image: \(FileManager.default.fileExists(atPath: store.restoreImage.path) ? "downloaded" : "not downloaded")")
             print("base machine: \(store.base.exists ? "installed" : "not installed")")
-            print("for a rented machine: \(resources.cpuCount) cores, \(resources.memoryBytes >> 30) GB memory, \(resources.diskBytes >> 30) GB disk (sparse)")
+            print("for a rented machine: \(resources.cpuCount) cores, \(resources.memoryBytes >> 30) GB memory")
+            if store.base.exists, let size = try? FileManager.default.attributesOfItem(atPath: store.base.disk.path)[.size] as? UInt64 {
+                print("its disk: \(size >> 30) GB, fixed when the base machine was installed")
+            } else if let disk = VMResources.diskGB(forFreeGB: store.freeGB()) {
+                print("its disk would be: \(disk) GB (\(store.freeGB()) GB free on this Mac)")
+            } else {
+                print("\(VMError.notEnoughDisk(freeGB: store.freeGB()))")
+            }
             exit(0)
         case "install":
             if store.base.exists { fail("a base machine already exists at \(store.base.directory.path)") }
+            let sized = try VMInstaller.resources(for: store)
             let image = try await VMInstaller.restoreImage(store: store, progress: percent("downloading macOS"))
             print("installing macOS \(image.operatingSystemVersion.majorVersion).\(image.operatingSystemVersion.minorVersion) (build \(image.buildVersion))")
-            try await VMInstaller.install(image: image, into: store.base, resources: resources, progress: percent("installing"))
+            try await VMInstaller.install(image: image, into: store.base, resources: sized, progress: percent("installing"))
             print("installed. Next: nodeex-vm setup")
             exit(0)
         case "provision":

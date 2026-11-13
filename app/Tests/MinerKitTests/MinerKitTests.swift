@@ -101,3 +101,22 @@ final class CoreCLITests: XCTestCase {
         XCTAssertEqual(other.message, "POST /v1/nodes/enroll: this enroll code has been used (token_used)")
     }
 }
+
+final class DiskSizingTests: XCTestCase {
+    /// The machine's disk is what the volume can spare after the base and
+    /// the host's reserve, so a full guest disk never fills the host's.
+    func testDiskFollowsFreeSpace() {
+        XCTAssertNil(VMResources.diskGB(forFreeGB: 40))
+        XCTAssertNil(VMResources.diskGB(forFreeGB: 55))
+        XCTAssertNil(VMResources.diskGB(forFreeGB: 134), "79 GB would be left: below the minimum")
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 135), 80)
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 200), 140, "a new 256 GB Mac mini")
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 209), 150)
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 460), 400, "a 512 GB Mac")
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 1900), 500, "capped")
+        for free in stride(from: UInt64(135), through: 2000, by: 7) {
+            let disk = VMResources.diskGB(forFreeGB: free)!
+            XCTAssertLessThanOrEqual(disk + VMResources.baseGB + VMResources.hostReserveGB, free)
+        }
+    }
+}

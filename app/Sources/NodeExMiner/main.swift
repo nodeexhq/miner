@@ -52,6 +52,13 @@ final class MinerModel: ObservableObject {
     private var stateDirectory: URL? { environment["NODEEX_MINER_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
     private var api: String { environment["NODEEX_API"] ?? "https://app.nodeex.com" }
 
+    /// What the machine's disk will be on this Mac, for the setup window.
+    var diskPlan: String {
+        let free = store.freeGB()
+        guard let disk = VMResources.diskGB(forFreeGB: free) else { return "\(VMError.notEnoughDisk(freeGB: free))".prefix(1).uppercased() + "\(VMError.notEnoughDisk(freeGB: free))".dropFirst() + "." }
+        return "This Mac has \(free) GB free. The machine's disk will be \(disk) GB, which leaves room for your own macOS even if a renter fills theirs."
+    }
+
     var needsWindow: Bool {
         switch phase {
         case .checking, .running: return false
@@ -127,11 +134,13 @@ final class MinerModel: ObservableObject {
         note = ""
         Task {
             do {
+                // Decided before 17 GB are downloaded for nothing.
+                let resources = try VMInstaller.resources(for: store)
                 let image = try await VMInstaller.restoreImage(store: store) { fraction in
                     Task { @MainActor in self.phase = .downloading(fraction) }
                 }
                 phase = .installing(0)
-                try await VMInstaller.install(image: image, into: store.base, resources: .forThisHost()) { fraction in
+                try await VMInstaller.install(image: image, into: store.base, resources: resources) { fraction in
                     Task { @MainActor in self.phase = .installing(fraction) }
                 }
                 // The image is 17 GB and has done its job.
@@ -310,7 +319,8 @@ struct SetupView: View {
                 }
             case .machineIntro:
                 Text("Create the machine renters will use").font(.title2).bold()
-                Text("A renter never uses your macOS. They get a virtual machine that is created for their lease and erased when it ends. NodeEx Miner downloads macOS from Apple for it, about 17 GB, and needs about 45 GB of free disk space.")
+                Text("A renter never uses your macOS. They get a virtual machine that is created for their lease and erased when it ends. NodeEx Miner downloads macOS from Apple for it, about 17 GB.")
+                Text(model.diskPlan).foregroundStyle(.secondary)
                 HStack {
                     Spacer()
                     Button("Download and create") { model.createMachine() }.keyboardShortcut(.defaultAction)
