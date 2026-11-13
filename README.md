@@ -54,8 +54,7 @@ node in service in the [quick start](https://nodeex.com/docs/miners/quickstart).
   the platform. Tokens last 10 minutes, and access ends when the lease does.
 
 While a lease is running, the renter has a login on the machine. Contribute a Mac you do not otherwise use: a new or
-freshly erased one is recommended. The Miner has nothing to do with cryptocurrency mining and does not load the
-processor.
+freshly erased one is recommended. The Miner has nothing to do with cryptocurrency mining.
 
 ## Layout
 
