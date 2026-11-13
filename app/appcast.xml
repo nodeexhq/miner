@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The update feed of NodeEx Miner for macOS. Installed apps read this file
+     from the main branch; scripts/publish.sh rewrites it for each release.
+     An item is trusted only if its signature matches the key built into
+     the app, so this file alone cannot make an app install anything. -->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>NodeEx Miner</title>
+  </channel>
+</rss>

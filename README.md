@@ -83,6 +83,10 @@ app/dist/nodeex-vm run       # boot a fresh copy and print its address
 `NODEEX_VM_CPUS` and `NODEEX_VM_MEMORY_GB` limit what a machine is given; by default it gets all but two cores and
 all but 4 GB of memory, which suits a Mac that does nothing else.
 
+The app updates itself with [Sparkle](https://sparkle-project.org). It reads `app/appcast.xml` from this
+repository, accepts only an update signed with the key built into the app and with the same Developer ID, and
+installs it with a restart when no lease is running: an update never cuts a renter off.
+
 A renter's machine is not on the owner's network. Its network device is a socket held by `vmnet/`, a small
 user-space network that runs without root: it gives the machine an address, DNS and the internet, and refuses
 everything addressed to private ranges (the owner's local network, this Mac, the overlay) and to the mail ports 25,

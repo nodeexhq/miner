@@ -1,6 +1,7 @@
 import AppKit
 import MinerKit
 import ServiceManagement
+import Sparkle
 import SwiftUI
 import Virtualization
 
@@ -43,6 +44,7 @@ final class MinerModel: ObservableObject {
     private var core: CoreSupervisor?
     private var machines: MachineController?
     private var setupRunner: VMRunner?
+    let updates = Updates()
     private var started = false
     private var triedEnvironmentCode = false
 
@@ -70,6 +72,7 @@ final class MinerModel: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        updates.start(model: self)
         advance()
     }
 
@@ -248,6 +251,7 @@ final class MinerModel: ObservableObject {
         case "lease_ended":
             lease = nil
             leaseEnds = nil
+            updates.leaseEnded()
             // The machine that renter used is destroyed and replaced.
             if let machines { Task { await machines.renew() } }
         default: break
@@ -274,6 +278,63 @@ final class MinerModel: ObservableObject {
         if fm.isExecutableFile(atPath: bundled.path) { return bundled }
         let beside = Bundle.main.bundleURL.appendingPathComponent("nodeex-miner")
         return fm.isExecutableFile(atPath: beside.path) ? beside : nil
+    }
+}
+
+/// Keeps the app up to date. Updates are found, downloaded and installed
+/// without asking, because a node is a machine nobody sits at; but an update
+/// restarts the app, and the app is what keeps a renter's machine running,
+/// so nothing is installed while a lease is on.
+@MainActor
+final class Updates: NSObject, SPUUpdaterDelegate {
+    private var controller: SPUStandardUpdaterController?
+    private weak var model: MinerModel?
+    private var resume: (() -> Void)?
+
+    /// False for a build that carries no feed address (a development run).
+    var available: Bool { controller != nil }
+
+    func start(model: MinerModel) {
+        self.model = model
+        guard controller == nil, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return }
+        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
+        // Sparkle's first check comes some time after launch; a test of
+        // the update path asks for one at once.
+        if ProcessInfo.processInfo.environment["NODEEX_CHECK_UPDATES_NOW"] != nil {
+            controller?.updater.checkForUpdatesInBackground()
+        }
+    }
+
+    func check() {
+        controller?.checkForUpdates(nil)
+    }
+
+    /// The lease ended: an update that was waiting may go ahead.
+    func leaseEnded() {
+        resume?()
+        resume = nil
+    }
+
+    /// An update is downloaded and would wait for the app to quit. A node
+    /// never quits on its own, so it is installed, with a relaunch, as
+    /// soon as no renter would be cut off: now, or when the lease ends.
+    nonisolated func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        MainActor.assumeIsolated {
+            if model?.lease != nil {
+                resume = immediateInstallHandler
+            } else {
+                DispatchQueue.main.async { immediateInstallHandler() }
+            }
+            return true
+        }
+    }
+
+    nonisolated func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem, untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
+        MainActor.assumeIsolated {
+            guard model?.lease != nil else { return false }
+            resume = installHandler
+            return true
+        }
     }
 }
 
@@ -394,6 +455,9 @@ struct MenuContent: View {
         }
         Divider()
         Button("Open the mining dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nodeex.com/mining")!) }
+        if model.updates.available {
+            Button("Check for Updates…") { model.updates.check() }
+        }
         Toggle("Start at login", isOn: Binding(
             get: { startsAtLogin },
             set: { on in
