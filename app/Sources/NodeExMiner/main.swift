@@ -486,7 +486,9 @@ struct Launcher: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Image(systemName: model.lease != nil ? "desktopcomputer.and.arrow.down" : model.gate == "open" ? "desktopcomputer" : "desktopcomputer.trianglebadge.exclamationmark")
+        // The NodeEx mark: with a dot while rented, dimmed while the node
+        // is not open to renters.
+        Image(nsImage: MenuBarMark.image(badge: model.lease != nil ? .dot : model.gate == "open" ? .none : .dimmed))
             .onAppear {
                 model.start()
                 if model.needsWindow {
