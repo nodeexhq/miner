@@ -66,10 +66,12 @@ public enum VMError: Error, CustomStringConvertible {
     case damagedBundle(String)
     case noAddress
     case notEnoughDisk(freeGB: UInt64)
+    case badRestoreImage
 
     public var description: String {
         switch self {
         case .noBaseImage: return "there is no base machine yet; prepare one first"
+        case .badRestoreImage: return "the downloaded macOS image could not be read; it was removed and will be downloaded again"
         case .unsupportedHost(let why): return "this Mac cannot run the virtual machine: \(why)"
         case .damagedBundle(let what): return "the machine on disk is incomplete: \(what)"
         case .noAddress: return "the virtual machine did not get a network address"
@@ -193,18 +195,50 @@ public enum VMConfiguration {
 /// Sharing): that is done once by hand, in a window, before the base is used.
 @MainActor
 public enum VMInstaller {
-    /// The image for this host, downloading it unless it is already there.
+    /// The image for this host: one already in the store, or one the owner
+    /// already has (in /Users/Shared or Downloads, for instance copied from
+    /// another Mac), or else downloaded from Apple, picking up a download
+    /// that was interrupted. An image that cannot be read is removed and
+    /// fetched again.
     public static func restoreImage(store: VMStore, progress: @escaping @Sendable (Double) -> Void) async throws -> VZMacOSRestoreImage {
         let fm = FileManager.default
         try fm.createDirectory(at: store.root, withIntermediateDirectories: true)
         if fm.fileExists(atPath: store.restoreImage.path) {
-            return try await VZMacOSRestoreImage.image(from: store.restoreImage)
+            if let image = await usable(store.restoreImage) { return image }
+            try? fm.removeItem(at: store.restoreImage)
+        }
+        // Used where it is, and left there: it is the owner's file.
+        for url in existingImages() {
+            if let image = await usable(url) { return image }
         }
         let latest = try await VZMacOSRestoreImage.latestSupported
-        let delegate = DownloadProgress(progress)
-        let (temporary, _) = try await URLSession.shared.download(from: latest.url, delegate: delegate)
-        try fm.moveItem(at: temporary, to: store.restoreImage)
-        return try await VZMacOSRestoreImage.image(from: store.restoreImage)
+        let partial = store.root.appendingPathComponent("restore.ipsw.partial")
+        try await ResumableDownload.fetch(latest.url, to: store.restoreImage, partial: partial, progress: progress)
+        if let image = await usable(store.restoreImage) { return image }
+        try? fm.removeItem(at: store.restoreImage)
+        throw VMError.badRestoreImage
+    }
+
+    /// The image at url, if it can be read and this Mac can run it.
+    static func usable(_ url: URL) async -> VZMacOSRestoreImage? {
+        guard let image = try? await VZMacOSRestoreImage.image(from: url),
+              let config = image.mostFeaturefulSupportedConfiguration, config.hardwareModel.isSupported else { return nil }
+        return image
+    }
+
+    /// macOS images the owner already has, newest first.
+    nonisolated static func existingImages(in directories: [URL]? = nil) -> [URL] {
+        let fm = FileManager.default
+        let dirs = directories ?? ([URL(fileURLWithPath: "/Users/Shared")] + fm.urls(for: .downloadsDirectory, in: .userDomainMask))
+        var found: [(URL, Date)] = []
+        for dir in dirs {
+            let items = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles])) ?? []
+            for url in items where url.pathExtension.lowercased() == "ipsw" {
+                let date = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                found.append((url, date))
+            }
+        }
+        return found.sorted { $0.1 > $1.1 }.map(\.0)
     }
 
     /// Lays out an empty machine for the image and installs macOS on it.
@@ -247,18 +281,94 @@ public enum VMInstaller {
     }
 }
 
-final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+/// Downloads a file into a partial file and then moves it into place. A
+/// partial file left by an earlier attempt is continued with an HTTP range
+/// request, so an interrupted 17 GB download does not start over.
+final class ResumableDownload: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let partial: URL
     private let report: @Sendable (Double) -> Void
+    private var handle: FileHandle?
+    private var written: Int64
+    private var total: Int64 = 0
+    private var failure: Error?
+    private var continuation: CheckedContinuation<Void, Error>?
 
-    init(_ report: @escaping @Sendable (Double) -> Void) {
+    private init(partial: URL, written: Int64, report: @escaping @Sendable (Double) -> Void) {
+        self.partial = partial
+        self.written = written
         self.report = report
     }
 
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        if totalBytesExpectedToWrite > 0 { report(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)) }
+    static func fetch(_ url: URL, to destination: URL, partial: URL, configuration: URLSessionConfiguration = .default,
+                      progress: @escaping @Sendable (Double) -> Void) async throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: partial.path) { fm.createFile(atPath: partial.path, contents: nil) }
+        let have = (try? fm.attributesOfItem(atPath: partial.path)[.size] as? Int64) ?? 0
+        let download = ResumableDownload(partial: partial, written: have, report: progress)
+        var request = URLRequest(url: url)
+        if have > 0 { request.setValue("bytes=\(have)-", forHTTPHeaderField: "Range") }
+        let session = URLSession(configuration: configuration, delegate: download, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            download.continuation = c
+            session.dataTask(with: request).resume()
+        }
+        try? fm.removeItem(at: destination)
+        try fm.moveItem(at: partial, to: destination)
     }
 
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let expected = max(response.expectedContentLength, 0)
+        do {
+            switch status {
+            case 206: // continuing
+                total = written + expected
+            case 200: // the server sent it all: start the file again
+                written = 0
+                total = expected
+                try FileHandle(forWritingTo: partial).truncate(atOffset: 0)
+            case 416: // nothing left to send: the partial file is complete
+                completionHandler(.cancel)
+                return
+            default:
+                throw URLError(.badServerResponse)
+            }
+            let h = try FileHandle(forWritingTo: partial)
+            try h.seekToEnd()
+            handle = h
+            completionHandler(.allow)
+        } catch {
+            failure = error
+            completionHandler(.cancel)
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        do {
+            try handle?.write(contentsOf: data)
+            written += Int64(data.count)
+            if total > 0 { report(min(1, Double(written) / Double(total))) }
+        } catch {
+            failure = error
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        try? handle?.close()
+        handle = nil
+        let c = continuation
+        continuation = nil
+        if let failure {
+            c?.resume(throwing: failure)
+        } else if let error, (error as? URLError)?.code != .cancelled {
+            c?.resume(throwing: error)
+        } else {
+            c?.resume()
+        }
+    }
 }
 
 /// A running machine.
