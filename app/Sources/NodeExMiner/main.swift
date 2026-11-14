@@ -46,6 +46,8 @@ final class MinerModel: ObservableObject {
     private var setupRunner: VMRunner?
     let updates = Updates()
     private var started = false
+    /// Keeps the Mac from sleeping while the node runs.
+    private var awake: NSObjectProtocol?
     private var triedEnvironmentCode = false
 
     private var environment: [String: String] { ProcessInfo.processInfo.environment }
@@ -206,6 +208,14 @@ final class MinerModel: ObservableObject {
     private func run(binary: URL) {
         guard core == nil else { return }
         phase = .running
+        // A node that falls asleep is offline to renters. While the node
+        // runs, idle sleep is held off (the display may still sleep). It is
+        // released when the app quits; macOS ends it if the app crashes.
+        if awake == nil {
+            awake = ProcessInfo.processInfo.beginActivity(
+                options: [.idleSystemSleepDisabled, .suddenTerminationDisabled],
+                reason: "NodeEx Miner is serving renters")
+        }
         do {
             let controller = try MachineController(store: store)
             controller.onChange = { [weak self] state in self?.machine = Self.describe(state) }
