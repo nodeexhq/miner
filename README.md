@@ -9,9 +9,9 @@ return: a node earns only when it is rented.
 
 ## Status
 
-Early access. The Miner is a command-line program. Release builds are signed with a Developer ID and notarized by
-Apple, so macOS runs them without a warning; the first run needs a network connection for that check. There is no
-installer, menu-bar app or automatic update yet.
+Early access. The Miner is a command-line program, and the NodeEx Miner app, which sets up the machine and updates
+itself, is in testing. Release builds are signed with a Developer ID and notarized by Apple, so macOS runs them
+without a warning; the first run needs a network connection for that check.
 
 ## Requirements
 
@@ -112,6 +112,18 @@ JSON lines; that is how the app follows the Miner.
 [NodeEx Connect](https://github.com/nodeexhq/connect), the renter's client, uses the first four.
 
 ## Security
+
+Official builds are published only on this repository's releases page and on https://nodeex.com/download. They are
+signed with the Developer ID `HE PANG (7GS265YM4T)` and notarized by Apple, and every release has a `SHA256SUMS`
+file. Before running a build, check it:
+
+```sh
+shasum -a 256 -c SHA256SUMS --ignore-missing
+spctl -a -vv -t install NodeEx-Miner-vX.Y.Z.dmg   # origin=Developer ID Application: HE PANG (7GS265YM4T)
+```
+
+A fork of this code is not an official build, whatever it is called, and cannot carry that signature. See
+[how to check a download](https://nodeex.com/security#software).
 
 Please report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
