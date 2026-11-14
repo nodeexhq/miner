@@ -87,10 +87,16 @@ public final class CoreSupervisor: @unchecked Sendable {
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
-        read(out) { [weak self] line in self?.handleEvent(line) }
-        read(err) { [weak self] line in self?.onLog?(line) }
+        // Everything a run wrote is delivered before its exit is reported,
+        // so a late line of one run never lands after the next one starts.
+        let drained = DispatchGroup()
+        read(out, drained) { [weak self] line in self?.handleEvent(line) }
+        read(err, drained) { [weak self] line in self?.onLog?(line) }
         p.terminationHandler = { [weak self] finished in
-            self?.queue.async { self?.exited(finished) }
+            self?.queue.async {
+                _ = drained.wait(timeout: .now() + 5)
+                self?.exited(finished)
+            }
         }
         do {
             try p.run()
@@ -136,13 +142,16 @@ public final class CoreSupervisor: @unchecked Sendable {
         onEvent?(event)
     }
 
-    /// Delivers a pipe's output a line at a time.
-    private func read(_ pipe: Pipe, _ deliver: @escaping @Sendable (String) -> Void) {
+    /// Delivers a pipe's output a line at a time; leaves the group at the end
+    /// of the output.
+    private func read(_ pipe: Pipe, _ group: DispatchGroup, _ deliver: @escaping @Sendable (String) -> Void) {
         let buffer = LineBuffer()
+        group.enter()
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                group.leave()
                 return
             }
             for line in buffer.append(data) { deliver(line) }
