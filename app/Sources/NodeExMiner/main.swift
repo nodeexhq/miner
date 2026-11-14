@@ -441,7 +441,14 @@ struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
     @State private var startsAtLogin = SMAppService.mainApp.status == .enabled
 
+    /// The version, so an owner can see an update arrive.
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development build"
+    }
+
     var body: some View {
+        Text("NodeEx Miner \(version)")
+        Divider()
         if model.phase == .running {
             Text("Node: \(model.nodeStatus)")
             Text(model.coreRunning ? "Miner: running" : "Miner: stopped")
