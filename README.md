@@ -114,12 +114,13 @@ JSON lines; that is how the app follows the Miner.
 ## Security
 
 Official builds are published only on this repository's releases page and on https://nodeex.com/download. They are
-signed with the Developer ID `HE PANG (7GS265YM4T)` and notarized by Apple, and every release has a `SHA256SUMS`
+signed with NodeEx's Developer ID (team ID `7GS265YM4T`) and notarized by Apple, and every release has a `SHA256SUMS`
 file. Before running a build, check it:
 
 ```sh
 shasum -a 256 -c SHA256SUMS --ignore-missing
-spctl -a -vv -t install NodeEx-Miner-vX.Y.Z.dmg   # origin=Developer ID Application: HE PANG (7GS265YM4T)
+spctl -a -vv -t install NodeEx-Miner-vX.Y.Z.dmg                 # source=Notarized Developer ID
+codesign -dv NodeEx-Miner-vX.Y.Z.dmg 2>&1 | grep TeamIdentifier # TeamIdentifier=7GS265YM4T
 ```
 
 A fork of this code is not an official build, whatever it is called, and cannot carry that signature. See
