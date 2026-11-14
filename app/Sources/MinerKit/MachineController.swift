@@ -71,6 +71,13 @@ public final class MachineController {
             // The helper forwards the two loopback ports for as long as this
             // machine lives, and applies the outbound rules to it.
             let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort)
+            network.onExit = { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.generation == mine else { return }
+                    self.state = .failed("the machine's network stopped")
+                    self.retry(mine)
+                }
+            }
             let next = try VMRunner(bundle: store.current, resources: resources, network: network)
             next.onStop = { [weak self] error in
                 guard let self, self.generation == mine else { return }
@@ -84,10 +91,31 @@ public final class MachineController {
             let endpoint = try await next.sshEndpoint()
             guard generation == mine else { return }
             state = .ready(sshPort: endpoint.port)
+            failures = 0
+            NSLog("NodeEx machine: ready, SSH on 127.0.0.1:%d", endpoint.port)
             applyKeys()
         } catch {
             guard generation == mine else { return }
             state = .failed("\(error)")
+            NSLog("NodeEx machine: could not be made ready: %@", "\(error)")
+            retry(mine)
+        }
+    }
+
+    /// Consecutive failures to make a machine ready, for spacing out retries.
+    private var failures = 0
+
+    /// Tries again after a failure: soon at first, then less often (30 s,
+    /// 1, 2, 4 … up to 10 minutes), so a passing problem fixes itself and a
+    /// lasting one does not spin.
+    private func retry(_ generation: Int) {
+        failures += 1
+        let delay = min(30.0 * pow(2.0, Double(failures - 1)), 600)
+        NSLog("NodeEx machine: retrying in %.0f s (failure %d)", delay, failures)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, self.generation == generation else { return }
+            await self.renew()
         }
     }
 

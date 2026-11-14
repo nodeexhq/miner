@@ -34,11 +34,31 @@ public final class GuestNetwork: @unchecked Sendable {
         process.arguments = ["-mac", macAddress, "-ssh-listen", "127.0.0.1:\(sshPort)", "-vnc-listen", "127.0.0.1:\(vncPort)"]
         process.standardInput = helperEnd
         process.standardOutput = FileHandle.nullDevice
+        // What the helper says goes to the system log, where an owner (or
+        // support) can find why a machine has no network.
+        let errors = Pipe()
+        process.standardError = errors
+        errors.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil; return }
+            for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+                NSLog("NodeEx network: %@", String(line))
+            }
+        }
+        process.terminationHandler = { [weak self] p in
+            NSLog("NodeEx network: helper exited with status %d", p.terminationStatus)
+            self?.onExit?()
+        }
         try process.run()
         try? helperEnd.close()
     }
 
+    /// Called if the helper stops on its own: the machine has lost its
+    /// network and should be replaced.
+    public var onExit: (@Sendable () -> Void)?
+
     public func stop() {
+        onExit = nil
         if process.isRunning { process.terminate() }
         process.waitUntilExit()
     }

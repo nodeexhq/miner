@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -46,6 +47,15 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// The helper of the machine before this one may still hold the ports
+	// for a moment (when the app restarts, it leaves only once it notices,
+	// within a second). Wait for them rather than fail.
+	for _, addr := range []string{*sshListen, *vncListen} {
+		if err := waitForPort(ctx, addr, 15*time.Second); err != nil {
+			log.Fatalf("%s: %v", addr, err)
+		}
+	}
 
 	vn, err := virtualnetwork.New(&types.Configuration{
 		MTU:               1500,
@@ -94,5 +104,24 @@ func main() {
 	conn.Close()
 	if n := filtered.dropped.Load(); n > 0 {
 		log.Printf("refused %d frames from the machine", n)
+	}
+}
+
+// waitForPort returns once addr can be listened on, or after limit.
+func waitForPort(ctx context.Context, addr string, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
+	for {
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln.Close()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("still in use after %s: %w", limit, err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 }
