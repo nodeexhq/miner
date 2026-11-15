@@ -296,10 +296,13 @@ final class MinerModel: ObservableObject {
 /// restarts the app, and the app is what keeps a renter's machine running,
 /// so nothing is installed while a lease is on.
 @MainActor
-final class Updates: NSObject, SPUUpdaterDelegate {
+final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
     private var controller: SPUStandardUpdaterController?
     private weak var model: MinerModel?
     private var resume: (() -> Void)?
+    /// The version of an update that is ready but waiting for the lease to
+    /// end, shown in the menu with a way to install it now.
+    @Published private(set) var waiting: String?
 
     /// False for a build that carries no feed address (a development run).
     var available: Bool { controller != nil }
@@ -321,6 +324,13 @@ final class Updates: NSObject, SPUUpdaterDelegate {
 
     /// The lease ended: an update that was waiting may go ahead.
     func leaseEnded() {
+        installNow()
+    }
+
+    /// Installs a waiting update at once, relaunching the app. During a lease
+    /// the renter's connection drops for the minute this takes.
+    func installNow() {
+        waiting = nil
         resume?()
         resume = nil
     }
@@ -332,6 +342,7 @@ final class Updates: NSObject, SPUUpdaterDelegate {
         MainActor.assumeIsolated {
             if model?.lease != nil {
                 resume = immediateInstallHandler
+                waiting = item.displayVersionString
             } else {
                 DispatchQueue.main.async { immediateInstallHandler() }
             }
@@ -343,6 +354,7 @@ final class Updates: NSObject, SPUUpdaterDelegate {
         MainActor.assumeIsolated {
             guard model?.lease != nil else { return false }
             resume = installHandler
+            waiting = item.displayVersionString
             return true
         }
     }
@@ -438,6 +450,7 @@ struct SetupView: View {
 
 struct MenuContent: View {
     @ObservedObject var model: MinerModel
+    @ObservedObject var updates: Updates
     @Environment(\.openWindow) private var openWindow
     @State private var startsAtLogin = SMAppService.mainApp.status == .enabled
 
@@ -472,6 +485,11 @@ struct MenuContent: View {
         }
         Divider()
         Button("Open the mining dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nodeex.com/mining")!) }
+        if let version = updates.waiting {
+            // Ready, but held back so that a renter is not cut off.
+            Text("Update \(version) will install when the lease ends")
+            Button("Install update now (the renter reconnects in a minute)") { updates.installNow() }
+        }
         if model.updates.available {
             Button("Check for Updates…") { model.updates.check() }
         }
@@ -521,7 +539,7 @@ struct MinerApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(model: model)
+            MenuContent(model: model, updates: model.updates)
         } label: {
             Launcher(model: model)
         }
