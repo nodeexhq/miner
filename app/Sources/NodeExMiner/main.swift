@@ -375,7 +375,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
         // machine and its disk come back as they were.
         Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.waiting != nil, self.model?.renterActive != true else { return }
+                guard let self, self.waiting != nil, !self.shouldWait() else { return }
                 self.installNow()
             }
         }
@@ -389,7 +389,34 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
     }
 
     func check() {
+        // The owner asked: what they then choose to install goes in now.
+        ownerAskedAt = Date()
         controller?.checkForUpdates(nil)
+    }
+
+    /// When the owner last checked for updates from the menu. An update they
+    /// install from that check (within half an hour) is not held back for a
+    /// renter: they chose the moment. Later, automatic updates wait again.
+    private var ownerAskedAt: Date?
+    private var ownerAsked: Bool { ownerAskedAt.map { Date().timeIntervalSince($0) < 1800 } ?? false }
+    /// When an update first had to wait for a renter.
+    private var waitingSince: Date?
+
+    /// Whether an update should wait now. Not when the owner asked for it;
+    /// otherwise while a renter is active, but no longer than a day: after
+    /// that it goes in during the small hours (03:00 to 05:00, this Mac's
+    /// time), because a renter's machine and disk survive the restart and
+    /// a connection that looks open may be one that died without saying so.
+    private func shouldWait() -> Bool {
+        if ownerAsked { return false }
+        guard model?.renterActive == true else { return false }
+        let since = waitingSince ?? Date()
+        waitingSince = since
+        if Date().timeIntervalSince(since) > 24 * 3600 {
+            let hour = Calendar.current.component(.hour, from: Date())
+            if (3..<5).contains(hour) { return false }
+        }
+        return true
     }
 
     /// The lease ended: an update that was waiting may go ahead.
@@ -401,6 +428,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
     /// the renter's connection drops for the minute this takes.
     func installNow() {
         waiting = nil
+        waitingSince = nil
         resume?()
         resume = nil
     }
@@ -410,7 +438,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
     /// soon as no renter would be cut off: now, or when the lease ends.
     nonisolated func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
         MainActor.assumeIsolated {
-            if model?.renterActive == true {
+            if shouldWait() {
                 resume = immediateInstallHandler
                 waiting = item.displayVersionString
             } else {
@@ -422,7 +450,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
 
     nonisolated func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem, untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
         MainActor.assumeIsolated {
-            guard model?.renterActive == true else { return false }
+            guard shouldWait() else { return false }
             resume = installHandler
             waiting = item.displayVersionString
             return true

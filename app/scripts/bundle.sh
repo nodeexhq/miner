@@ -43,7 +43,7 @@ if [ -n "$FEED_URL" ]; then
 	<key>SUPublicEDKey</key><string>$(cat "$APP_DIR/sparkle_public_key")</string>
 	<key>SUEnableAutomaticChecks</key><true/>
 	<key>SUAutomaticallyUpdate</key><true/>
-	<key>SUScheduledCheckInterval</key><integer>21600</integer>"
+	<key>SUScheduledCheckInterval</key><integer>3600</integer>"
   case "$FEED_URL" in
     http://127.0.0.1*|http://localhost*)
       UPDATE_KEYS="$UPDATE_KEYS
