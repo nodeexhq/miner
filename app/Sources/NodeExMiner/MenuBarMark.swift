@@ -70,17 +70,31 @@ public enum NodeExMark {
 }
 
 /// The mark for the menu bar, in one colour as a template image so macOS
-/// tints it for light and dark menu bars.
+/// tints it for light and dark menu bars. The two apps sit side by side in
+/// the menu bar, so they differ in shape: Connect shows the bare mark, the
+/// Miner the mark cut out of a solid tile (this Mac is a node).
 public enum MenuBarMark {
     public enum Badge { case none, dot, dimmed }
+    public enum Style { case plain, tile }
 
-    public static func image(badge: Badge = .none, height: CGFloat = 16) -> NSImage {
+    public static func image(style: Style = .plain, badge: Badge = .none, height: CGFloat = 16) -> NSImage {
         let size = NSSize(width: height, height: height)
         let img = NSImage(size: size, flipped: true) { _ in
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
             let alpha: CGFloat = badge == .dimmed ? 0.45 : 1
             ctx.setFillColor(NSColor.black.withAlphaComponent(alpha).cgColor)
-            NodeExMark.fill(in: CGRect(origin: .zero, size: size), context: ctx)
+            let box = CGRect(origin: .zero, size: size)
+            switch style {
+            case .plain:
+                NodeExMark.fill(in: box, context: ctx)
+            case .tile:
+                let tile = box.insetBy(dx: height * 0.03, dy: height * 0.03)
+                ctx.addPath(CGPath(roundedRect: tile, cornerWidth: height * 0.26, cornerHeight: height * 0.26, transform: nil))
+                ctx.fillPath()
+                ctx.setBlendMode(.clear)
+                NodeExMark.fill(in: box.insetBy(dx: height * 0.17, dy: height * 0.17), context: ctx)
+                ctx.setBlendMode(.normal)
+            }
             if badge == .dot {
                 // A connection or a lease: a solid dot in the empty top-right
                 // corner, with a clear ring so it reads against the arcs.

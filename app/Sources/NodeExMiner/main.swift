@@ -624,7 +624,7 @@ struct Launcher: View {
     var body: some View {
         // The NodeEx mark: with a dot while rented, dimmed while the node
         // is not open to renters.
-        Image(nsImage: MenuBarMark.image(badge: model.lease != nil ? .dot : model.gate == "open" ? .none : .dimmed))
+        Image(nsImage: MenuBarMark.image(style: .tile, badge: model.lease != nil ? .dot : model.gate == "open" ? .none : .dimmed))
             .onAppear {
                 model.start()
                 if model.needsWindow {
