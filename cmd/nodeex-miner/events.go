@@ -16,6 +16,7 @@ import (
 //	{"event":"lease_started","lease":"<id>","ends_at":"..."}
 //	{"event":"lease_keys","lease":"<id>","ssh_keys":["ssh-ed25519 ..."]}   the renter's keys, whenever they change
 //	{"event":"lease_ended","lease":"<id>"}
+//	{"event":"sessions","sessions":<n>}   (when the number of renter connections changes)
 type event struct {
 	Event  string     `json:"event"`
 	State  string     `json:"state,omitempty"`
@@ -25,6 +26,9 @@ type event struct {
 	EndsAt *time.Time `json:"ends_at,omitempty"`
 	// SSHKeys is set, possibly empty, on lease_keys only.
 	SSHKeys []string `json:"ssh_keys,omitempty"`
+	// Sessions is the number of renter connections open, on sessions
+	// only: the app installs updates while nobody is connected.
+	Sessions *int `json:"sessions,omitempty"`
 }
 
 // eventWriter returns the function that reports events: to standard output

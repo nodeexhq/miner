@@ -11,9 +11,11 @@ public struct CoreEvent: Decodable, Sendable {
     public let lease: String?
     public let endsAt: Date?
     public let sshKeys: [String]?
+    /// Renter connections open, on "sessions" events.
+    public let sessions: Int?
 
     enum CodingKeys: String, CodingKey {
-        case event, state, node, addr, lease
+        case event, state, node, addr, lease, sessions
         case endsAt = "ends_at"
         case sshKeys = "ssh_keys"
     }

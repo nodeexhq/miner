@@ -95,3 +95,24 @@ final class DownloadTests: XCTestCase {
         XCTAssertEqual(VMInstaller.existingImages(in: [dir]).map(\.lastPathComponent), ["UniversalMac_26.IPSW", "UniversalMac_15.ipsw"])
     }
 }
+
+final class LeaseMarkerTests: XCTestCase {
+    func testAMachineBelongsToOneLeaseAndAFreshCopyToNone() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = VMStore(root: root)
+        try FileManager.default.createDirectory(at: store.base.directory, withIntermediateDirectories: true)
+        try Data("disk".utf8).write(to: store.base.disk)
+        try store.resetCurrent()
+        XCTAssertNil(store.currentLease, "a fresh copy of the base belongs to nobody")
+        store.currentLease = "lease-1"
+        XCTAssertEqual(store.currentLease, "lease-1")
+        // The renter's disk stays while the lease does…
+        try Data("renter's files".utf8).write(to: store.current.disk)
+        XCTAssertEqual(try String(contentsOf: store.current.disk, encoding: .utf8), "renter's files")
+        // …and a reset for the next renter wipes both.
+        try store.resetCurrent()
+        XCTAssertNil(store.currentLease)
+        XCTAssertEqual(try String(contentsOf: store.current.disk, encoding: .utf8), "disk")
+    }
+}

@@ -46,6 +46,15 @@ final class MinerModel: ObservableObject {
     private var setupRunner: VMRunner?
     let updates = Updates()
     private var started = false
+    private var checkedLeaseAtLaunch = false
+    /// Renter connections open, and when that last changed: an update
+    /// during a lease waits until nobody has been connected for a while.
+    @Published var sessions = 0
+    var sessionsChanged = Date()
+    /// Whether a renter could be cut off by restarting now.
+    var renterActive: Bool {
+        lease != nil && (sessions > 0 || Date().timeIntervalSince(sessionsChanged) < 600)
+    }
     /// Keeps the Mac from sleeping while the node runs.
     private var awake: NSObjectProtocol?
     private var triedEnvironmentCode = false
@@ -220,7 +229,7 @@ final class MinerModel: ObservableObject {
             let controller = try MachineController(store: store)
             controller.onChange = { [weak self] state in self?.machine = Self.describe(state) }
             machines = controller
-            Task { await controller.renew() }
+            Task { await controller.startAtLaunch() }
         } catch {
             machine = "unavailable: \(error)"
         }
@@ -250,11 +259,26 @@ final class MinerModel: ObservableObject {
 
     private func handle(_ event: CoreEvent) {
         switch event.event {
-        case "node": nodeStatus = event.state ?? "unknown"
+        case "node":
+            nodeStatus = event.state ?? "unknown"
+            // The first heartbeat says whether a lease is running; it is
+            // reported right after this. With none, a machine kept for a
+            // lease that ended while the app was not running is replaced.
+            if !checkedLeaseAtLaunch {
+                checkedLeaseAtLaunch = true
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
+                    if self.lease == nil { await self.machines?.noLease() }
+                }
+            }
         case "gate": gate = event.state ?? "off"
+        case "sessions":
+            sessions = event.sessions ?? 0
+            sessionsChanged = Date()
         case "lease_started":
             lease = event.lease
             leaseEnds = event.endsAt
+            if let id = event.lease, let machines { Task { await machines.leaseStarted(id) } }
         case "lease_keys":
             // The renter's way in to the machine this lease was given.
             machines?.authorize(renterKeys: event.sshKeys ?? [])
@@ -309,6 +333,15 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
 
     func start(model: MinerModel) {
         self.model = model
+        // A waiting update goes ahead once no renter has been connected for
+        // ten minutes: a restart then costs a renter nothing, and their
+        // machine and its disk come back as they were.
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.waiting != nil, self.model?.renterActive != true else { return }
+                self.installNow()
+            }
+        }
         guard controller == nil, Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil else { return }
         controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
         // Sparkle's first check comes some time after launch; a test of
@@ -340,7 +373,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
     /// soon as no renter would be cut off: now, or when the lease ends.
     nonisolated func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
         MainActor.assumeIsolated {
-            if model?.lease != nil {
+            if model?.renterActive == true {
                 resume = immediateInstallHandler
                 waiting = item.displayVersionString
             } else {
@@ -352,7 +385,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
 
     nonisolated func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem, untilInvokingBlock installHandler: @escaping () -> Void) -> Bool {
         MainActor.assumeIsolated {
-            guard model?.lease != nil else { return false }
+            guard model?.renterActive == true else { return false }
             resume = installHandler
             waiting = item.displayVersionString
             return true
@@ -487,7 +520,7 @@ struct MenuContent: View {
         Button("Open the mining dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nodeex.com/mining")!) }
         if let version = updates.waiting {
             // Ready, but held back so that a renter is not cut off.
-            Text("Update \(version) will install when the lease ends")
+            Text("Update \(version) will install once no renter has been connected for 10 minutes")
             Button("Install update now (the renter reconnects in a minute)") { updates.installNow() }
         }
         if model.updates.available {

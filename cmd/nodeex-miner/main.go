@@ -401,6 +401,7 @@ func cmdRun(args []string) error {
 	}
 
 	lastStatus := ""
+	lastSessions := -1
 	lastKeys := ""
 	started := time.Now()
 	lastReached := time.Now()
@@ -419,6 +420,11 @@ func cmdRun(args []string) error {
 		// Every heartbeat carries the Miner's own account of how it is
 		// running, for the owner's dashboard and for operators.
 		sessions, suspended := state.snapshot()
+		if sessions != lastSessions {
+			lastSessions = sessions
+			n := sessions
+			emit(event{Event: "sessions", Sessions: &n})
+		}
 		gate := "open"
 		switch {
 		case srv == nil:

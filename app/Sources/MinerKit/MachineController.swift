@@ -1,7 +1,8 @@
 import Foundation
 
-/// Keeps one fresh virtual machine ready for a renter and replaces it after
-/// every lease: the machine a renter used is destroyed, never handed on.
+/// Keeps one fresh virtual machine ready for a renter, keeps it (disk and
+/// all) for that renter through restarts while the lease runs, and replaces
+/// it after the lease: the machine a renter used is destroyed, never handed on.
 @MainActor
 public final class MachineController {
     public enum State: Equatable, Sendable {
@@ -46,13 +47,57 @@ public final class MachineController {
         return MachineSize(cpuCount: resources.cpuCount, memoryGB: Int(resources.memoryBytes >> 30), diskGB: Int(bytes >> 30))
     }
 
-    /// Throws away whatever machine exists and starts a new one from the
-    /// base. Called at launch and whenever a lease ends.
+    // A renter keeps their machine for the whole lease: when the app or
+    // the Mac restarts, or the renter shuts it down, the same machine (the
+    // same disk) starts again. It is destroyed only when the lease ends,
+    // and the next renter gets a fresh copy of the base.
+
+    /// At launch: the machine of a lease that may still be running is
+    /// started as it is; otherwise a fresh one is made. Whether the lease is
+    /// in fact still running is known after the core's first heartbeat
+    /// (leaseStarted or noLease).
+    public func startAtLaunch() async {
+        if store.currentLease != nil, store.current.exists {
+            await boot(reset: false)
+        } else {
+            await boot(reset: true)
+        }
+    }
+
+    /// A lease is running. A machine nobody has had yet becomes this
+    /// renter's; one that belonged to another lease is replaced first.
+    public func leaseStarted(_ id: String) async {
+        switch store.currentLease {
+        case id?:
+            return
+        case nil where store.current.exists:
+            store.currentLease = id
+        default:
+            await boot(reset: true, for: id)
+        }
+    }
+
+    /// No lease is running (after a restart, the lease may have ended while
+    /// the app was not running): a machine a renter had is replaced.
+    public func noLease() async {
+        if store.currentLease != nil { await renew() }
+    }
+
+    /// The lease ended: the machine that renter used is destroyed and a
+    /// fresh one made for the next.
     public func renew() async {
+        await boot(reset: true)
+    }
+
+    /// Starts a machine: a fresh copy of the base when reset is true (marked
+    /// as belonging to lease, if given), otherwise the current one as it is.
+    private func boot(reset: Bool, for lease: String? = nil) async {
         generation += 1
         let mine = generation
-        // The next machine is for the next renter: the last one's keys go.
-        wantedKeys = []
+        if reset {
+            // The next machine is for the next renter: the last one's keys go.
+            wantedKeys = []
+        }
         if let old = runner {
             runner = nil
             old.onStop = nil
@@ -64,7 +109,10 @@ public final class MachineController {
         }
         state = .starting
         do {
-            try store.resetCurrent()
+            if reset || !store.current.exists {
+                try store.resetCurrent()
+                store.currentLease = lease
+            }
             guard let mac = try? String(contentsOf: store.current.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
                 throw VMError.damagedBundle("MAC address")
             }
@@ -81,10 +129,11 @@ public final class MachineController {
             let next = try VMRunner(bundle: store.current, resources: resources, network: network)
             next.onStop = { [weak self] error in
                 guard let self, self.generation == mine else { return }
-                // The renter shut the machine down, or it crashed: either
-                // way they get a working machine back, with a clean disk.
+                // The renter shut the machine down, or it crashed. During a
+                // lease it starts again with its disk as it was; between
+                // leases a fresh one takes its place.
                 self.state = .failed(error.map { "\($0.localizedDescription)" } ?? "the machine was shut down")
-                Task { await self.renew() }
+                Task { await self.restart() }
             }
             runner = next
             try await next.start()
@@ -92,7 +141,7 @@ public final class MachineController {
             guard generation == mine else { return }
             state = .ready(sshPort: endpoint.port)
             failures = 0
-            NSLog("NodeEx machine: ready, SSH on 127.0.0.1:%d", endpoint.port)
+            NSLog("NodeEx machine: ready%@, SSH on 127.0.0.1:%d", store.currentLease.map { " for lease \($0)" } ?? "", endpoint.port)
             applyKeys()
         } catch {
             guard generation == mine else { return }
@@ -100,6 +149,12 @@ public final class MachineController {
             NSLog("NodeEx machine: could not be made ready: %@", "\(error)")
             retry(mine)
         }
+    }
+
+    /// Starts the machine again: the same one during a lease, a fresh one
+    /// otherwise.
+    private func restart() async {
+        await boot(reset: store.currentLease == nil)
     }
 
     /// Consecutive failures to make a machine ready, for spacing out retries.
@@ -115,7 +170,7 @@ public final class MachineController {
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, self.generation == generation else { return }
-            await self.renew()
+            await self.restart()
         }
     }
 

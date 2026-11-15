@@ -40,6 +40,19 @@ public struct VMStore: Sendable {
     /// Replaces the current machine with a fresh copy of the base. On APFS
     /// the copy shares the base's blocks, so it takes a moment and no extra
     /// space until the renter writes to it.
+    /// The lease the current machine belongs to, if a renter has had it.
+    /// Kept in the machine's own directory, so a fresh copy has none.
+    public var currentLease: String? {
+        get {
+            (try? String(contentsOf: current.directory.appendingPathComponent("lease"), encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        }
+        nonmutating set {
+            let file = current.directory.appendingPathComponent("lease")
+            if let newValue { try? newValue.write(to: file, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: file) }
+        }
+    }
+
     public func resetCurrent() throws {
         let fm = FileManager.default
         guard base.exists else { throw VMError.noBaseImage }
@@ -505,4 +518,8 @@ final class Once: @unchecked Sendable {
         done = true
         return true
     }
+}
+
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
