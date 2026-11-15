@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nodeexhq/miner/gate"
@@ -33,12 +34,52 @@ type leaseState struct {
 	suspended bool
 }
 
-// snapshot reports how many connections are being carried and whether the
-// gate is suspended, for the Miner's status report.
+// activeWithin is how recently a connection must have carried data to count
+// as a renter at work. A renter's client can vanish without closing its
+// connections (killed, offline), and the overlay never says so; such a
+// connection carries nothing and stops counting after this long.
+const activeWithin = 10 * time.Minute
+
+// activeConn records when data last went through a renter's connection.
+type activeConn struct {
+	net.Conn
+	last atomic.Int64 // Unix nanoseconds
+}
+
+func newActiveConn(c net.Conn) *activeConn {
+	a := &activeConn{Conn: c}
+	a.last.Store(time.Now().UnixNano())
+	return a
+}
+
+func (a *activeConn) Read(b []byte) (int, error) {
+	n, err := a.Conn.Read(b)
+	if n > 0 {
+		a.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+func (a *activeConn) Write(b []byte) (int, error) {
+	n, err := a.Conn.Write(b)
+	if n > 0 {
+		a.last.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+// snapshot reports how many connections carried data within activeWithin
+// and whether the gate is suspended, for the Miner's status report.
 func (s *leaseState) snapshot() (sessions int, suspended bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.conns), s.suspended
+	since := time.Now().Add(-activeWithin).UnixNano()
+	for c := range s.conns {
+		if a, ok := c.(*activeConn); !ok || a.last.Load() >= since {
+			sessions++
+		}
+	}
+	return sessions, s.suspended
 }
 
 // suspend stops serving until the next word from the platform, cutting
@@ -224,6 +265,7 @@ func serveGate(ctx context.Context, ln net.Listener, id identity, state *leaseSt
 		}
 		go func() {
 			defer conn.Close()
+			conn := newActiveConn(conn)
 			service, claims, err := verifier.Accept(conn)
 			<-handshakes
 			if err != nil {
