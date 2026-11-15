@@ -7,12 +7,12 @@
   <channel>
     <title>NodeEx Miner</title>
     <item>
-      <title>0.1.13</title>
-      <pubDate>Sun, 15 Nov 2026 02:11:34 +0000</pubDate>
-      <sparkle:version>43</sparkle:version>
-      <sparkle:shortVersionString>0.1.13</sparkle:shortVersionString>
+      <title>0.1.14</title>
+      <pubDate>Sun, 15 Nov 2026 03:33:45 +0000</pubDate>
+      <sparkle:version>46</sparkle:version>
+      <sparkle:shortVersionString>0.1.14</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/nodeexhq/miner/releases/download/v0.1.13/NodeEx-Miner-v0.1.13.dmg" type="application/octet-stream" sparkle:edSignature="RaCqgwGJZSdoJJeUsrSIzraODkGjP9J4VTrGzSOFd5dhapvww/hhzOUNMTHwICO5xgfMMymRk1hZN3IhsNAvCQ==" length="16901829" />
+      <enclosure url="https://github.com/nodeexhq/miner/releases/download/v0.1.14/NodeEx-Miner-v0.1.14.dmg" type="application/octet-stream" sparkle:edSignature="ZDQV3iDV62ouG6ldTVS51f2Syu7J5tlrnjDfWBNYo9ma4ky/pJAf+F2nUt46fogGdioeivVnn+yQbU+bQmidCQ==" length="16056304" />
     </item>
   </channel>
 </rss>
