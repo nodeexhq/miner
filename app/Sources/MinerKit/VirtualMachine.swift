@@ -18,6 +18,10 @@ public struct VMStore: Sendable {
     }
 
     public static var standard: VMStore {
+        // NODEEX_VM_DIR keeps a test away from the machines this Mac serves.
+        if let dir = ProcessInfo.processInfo.environment["NODEEX_VM_DIR"], !dir.isEmpty {
+            return VMStore(root: URL(fileURLWithPath: dir, isDirectory: true))
+        }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return VMStore(root: support.appendingPathComponent("NodeEx/Machines", isDirectory: true))
     }
@@ -88,7 +92,7 @@ public enum VMError: Error, CustomStringConvertible {
         case .unsupportedHost(let why): return "this Mac cannot run the virtual machine: \(why)"
         case .damagedBundle(let what): return "the machine on disk is incomplete: \(what)"
         case .noAddress: return "the virtual machine did not get a network address"
-        case .notEnoughDisk(let free): return "there is not enough free disk space for a machine: \(free) GB free, and \(VMResources.baseGB + VMResources.hostReserveGB + VMResources.minimumDiskGB) GB are needed"
+        case .notEnoughDisk(let free): return "there is not enough free disk space for a machine: \(free) GB free, and \(VMResources.hostReserveGB + VMResources.guestUpdateGB + VMResources.minimumDiskGB) GB are needed"
         }
     }
 }
@@ -109,21 +113,28 @@ public struct VMResources: Sendable {
     /// updates, logs, the owner's own use).
     static let baseGB: UInt64 = 25
     static let hostReserveGB: UInt64 = 30
+    /// Room for the guest's own macOS updates, which write new system blocks
+    /// beside the ones it shares with the base.
+    static let guestUpdateGB: UInt64 = 10
     /// Below this the guest's macOS leaves a renter too little to work in.
     static let minimumDiskGB: UInt64 = 80
     static let maximumDiskGB: UInt64 = 500
 
     /// The size of disk a new machine can be given on a volume with this
-    /// much free space, in GB, or nil if there is not enough.
+    /// much free space (measured before the base is installed), in GB, or
+    /// nil if there is not enough.
     ///
-    /// A lease's machine starts as a copy that shares the base's blocks, but
-    /// a renter may overwrite all of it: in the worst case the copy takes
-    /// its full size on top of the base. The size is therefore what is left
-    /// after the base and the host's reserve, rounded down to 10 GB, so a
-    /// renter who fills their disk cannot fill the owner's.
+    /// A lease's machine is an APFS copy of the base and shares its blocks:
+    /// the guest's macOS (some 25 GB) is on disk once, in the base, however
+    /// many copies there are. What a renter can add is what is free inside
+    /// their machine, its size less that shared system. So the base plus a
+    /// full machine take about the machine's size, and the machine may have
+    /// all the free space but the host's reserve and room for the guest's
+    /// own updates, rounded down to 10 GB. A renter who fills their disk
+    /// still cannot fill the owner's.
     public static func diskGB(forFreeGB free: UInt64) -> UInt64? {
-        guard free > baseGB + hostReserveGB else { return nil }
-        let size = min((free - baseGB - hostReserveGB) / 10 * 10, maximumDiskGB)
+        guard free > max(baseGB, guestUpdateGB) + hostReserveGB else { return nil }
+        let size = min((free - hostReserveGB - guestUpdateGB) / 10 * 10, maximumDiskGB)
         return size >= minimumDiskGB ? size : nil
     }
 
@@ -522,4 +533,19 @@ final class Once: @unchecked Sendable {
 
 extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
+extension FileManager {
+    /// The space the files under a directory take on disk, in bytes; files
+    /// that share blocks (APFS copies) are each counted in full.
+    public func allocatedSizeOfDirectory(at url: URL) throws -> UInt64 {
+        var total: UInt64 = 0
+        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+        guard let walk = enumerator(at: url, includingPropertiesForKeys: keys) else { return 0 }
+        for case let file as URL in walk {
+            let v = try file.resourceValues(forKeys: Set(keys))
+            if v.isRegularFile == true { total += UInt64(v.totalFileAllocatedSize ?? 0) }
+        }
+        return total
+    }
 }

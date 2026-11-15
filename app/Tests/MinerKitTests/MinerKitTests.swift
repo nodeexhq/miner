@@ -114,20 +114,23 @@ final class CoreCLITests: XCTestCase {
 }
 
 final class DiskSizingTests: XCTestCase {
-    /// The machine's disk is what the volume can spare after the base and
-    /// the host's reserve, so a full guest disk never fills the host's.
+    /// The machine's disk is what the volume can spare after the host's
+    /// reserve and room for guest updates (the guest's system is shared with
+    /// the base), so a full guest disk never fills the host's.
     func testDiskFollowsFreeSpace() {
         XCTAssertNil(VMResources.diskGB(forFreeGB: 40))
         XCTAssertNil(VMResources.diskGB(forFreeGB: 55))
-        XCTAssertNil(VMResources.diskGB(forFreeGB: 134), "79 GB would be left: below the minimum")
-        XCTAssertEqual(VMResources.diskGB(forFreeGB: 135), 80)
-        XCTAssertEqual(VMResources.diskGB(forFreeGB: 200), 140, "a new 256 GB Mac mini")
-        XCTAssertEqual(VMResources.diskGB(forFreeGB: 209), 150)
-        XCTAssertEqual(VMResources.diskGB(forFreeGB: 460), 400, "a 512 GB Mac")
+        XCTAssertNil(VMResources.diskGB(forFreeGB: 119), "79 GB would be left: below the minimum")
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 120), 80)
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 173), 130, "the 256 GB Mac mini in testing")
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 200), 160, "a new 256 GB Mac mini")
+        XCTAssertEqual(VMResources.diskGB(forFreeGB: 460), 420, "a 512 GB Mac")
         XCTAssertEqual(VMResources.diskGB(forFreeGB: 1900), 500, "capped")
-        for free in stride(from: UInt64(135), through: 2000, by: 7) {
+        for free in stride(from: UInt64(120), through: 2000, by: 7) {
             let disk = VMResources.diskGB(forFreeGB: free)!
-            XCTAssertLessThanOrEqual(disk + VMResources.baseGB + VMResources.hostReserveGB, free)
+            // The base's system is shared with the machine, so base plus a
+            // full machine take about the machine's size.
+            XCTAssertLessThanOrEqual(disk + VMResources.hostReserveGB + VMResources.guestUpdateGB, free)
         }
     }
 }

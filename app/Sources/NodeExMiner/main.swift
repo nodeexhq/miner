@@ -248,6 +248,43 @@ final class MinerModel: ObservableObject {
         supervisor.start()
     }
 
+    /// The disk a rebuilt machine would have on this Mac now, in GB.
+    var rebuiltDiskGB: UInt64? {
+        // The base counts as free: it is replaced. (The current machine is
+        // an APFS copy of it and shares its blocks, so it is not added.)
+        let machines = (try? FileManager.default.allocatedSizeOfDirectory(at: store.base.directory)) ?? 0
+        return VMResources.diskGB(forFreeGB: store.freeGB() + machines >> 30)
+    }
+
+    /// The disk the current machine has, in GB.
+    var currentDiskGB: Int? { machines?.machineSize?.diskGB }
+
+    /// Throws away the base machine and builds a new one, for instance to
+    /// give renters the larger disk this version of the app allows. Only
+    /// between leases. macOS is downloaded again unless an image is at hand,
+    /// and the new machine needs its first-run setup again.
+    func rebuildMachine() {
+        guard lease == nil, phase == .running else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rebuild the renters' machine?"
+        let size = rebuiltDiskGB.map { "\($0) GB" } ?? "the size this Mac allows"
+        alert.informativeText = "The machine renters get is deleted and made again, with a disk of \(size)" + (currentDiskGB.map { " instead of \($0) GB" } ?? "") + ". This downloads macOS again (about 17 GB) unless a .ipsw file is in /Users/Shared or Downloads, and you will set up the new machine once more (an account, then Remote Login and Screen Sharing), from Continue setup in this menu. The node takes no orders until it is done."
+        alert.addButton(withTitle: "Rebuild")
+        alert.addButton(withTitle: "Cancel")
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            await stop()
+            try? FileManager.default.removeItem(at: store.current.directory)
+            try? FileManager.default.removeItem(at: store.base.directory)
+            try? FileManager.default.removeItem(at: store.root.appendingPathComponent("account"))
+            started = true
+            checkedLeaseAtLaunch = false
+            phase = .machineIntro
+            NSLog("NodeEx machine: rebuilding at the owner's request")
+        }
+    }
+
     func stop() async {
         core?.stop()
         core = nil
@@ -517,6 +554,9 @@ struct MenuContent: View {
             }
         }
         Divider()
+        if model.phase == .running && model.lease == nil {
+            Button("Rebuild the renters' machine…") { model.rebuildMachine() }
+        }
         Button("Open the mining dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nodeex.com/mining")!) }
         if let version = updates.waiting {
             // Ready, but held back so that a renter is not cut off.
