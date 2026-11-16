@@ -138,6 +138,7 @@ public enum Provisioning {
         set -e
         if ! /usr/bin/id \(user) >/dev/null 2>&1; then
           sudo -n /usr/sbin/sysadminctl -addUser \(user) -fullName Renter -admin -password "$(/usr/bin/openssl rand -base64 24)" >/dev/null 2>&1
+          \(lowBandwidthDefaults(user))
         fi
         sudo -n /bin/mkdir -p /Users/\(user)/.ssh
         sudo -n /usr/bin/tee /Users/\(user)/.ssh/authorized_keys >/dev/null
@@ -146,6 +147,30 @@ public enum Provisioning {
         sudo -n /bin/chmod 600 /Users/\(user)/.ssh/authorized_keys
         """
         try guest(script, at: endpoint, account: account, store: store, input: keys)
+    }
+
+    /// Settings for a new renter account that spare the remote desktop's
+    /// bandwidth: renters often connect over slow or lossy lines, and a
+    /// machine for development does not need animations or a screen saver.
+    /// Each is best effort (the accessibility two are protected on some
+    /// macOS versions) and none can stop the account being made.
+    static func lowBandwidthDefaults(_ user: String) -> String {
+        let writes = [
+            "-g NSAutomaticWindowAnimationsEnabled -bool false",
+            "-g NSWindowResizeTime -float 0.001",
+            "-g NSScrollAnimationEnabled -bool false",
+            "-g QLPanelAnimationDuration -float 0",
+            "com.apple.dock launchanim -bool false",
+            "com.apple.dock expose-animation-duration -float 0.1",
+            "com.apple.dock mineffect -string scale",
+            "com.apple.finder DisableAllAnimations -bool true",
+            "-currentHost com.apple.screensaver idleTime -int 0",
+            "com.apple.universalaccess reduceTransparency -bool true",
+            "com.apple.universalaccess reduceMotion -bool true",
+        ]
+        var lines = ["sudo -n /usr/sbin/createhomedir -c -u \(user) >/dev/null 2>&1 || true"]
+        lines += writes.map { "sudo -n -H -u \(user) /usr/bin/defaults write \($0) >/dev/null 2>&1 || true" }
+        return lines.joined(separator: "\n  ")
     }
 
     /// A single line that looks like an OpenSSH public key, so that nothing
