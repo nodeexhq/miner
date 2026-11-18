@@ -16,19 +16,37 @@ import (
 //	{"event":"lease_started","lease":"<id>","ends_at":"..."}
 //	{"event":"lease_keys","lease":"<id>","ssh_keys":["ssh-ed25519 ..."]}   the renter's keys, whenever they change
 //	{"event":"lease_ended","lease":"<id>"}
+//	{"event":"lease_state","state":"active","lease":"<id>","ends_at":"...","confirmed_at":"...","ssh_keys":[...]}
+//	{"event":"lease_state","state":"idle","confirmed_at":"..."}
+//
+// lease_state is a complete, authoritative snapshot on EVERY successful
+// heartbeat, including renewals and an explicit absence of a lease. A VM
+// supervisor must not infer authorization from gate status or old disk data.
+//
 //	{"event":"sessions","sessions":<n>}   (when the number of renter connections changes)
 type event struct {
-	Event  string     `json:"event"`
-	State  string     `json:"state,omitempty"`
-	Node   string     `json:"node,omitempty"`
-	Addr   string     `json:"addr,omitempty"`
-	Lease  string     `json:"lease,omitempty"`
-	EndsAt *time.Time `json:"ends_at,omitempty"`
-	// SSHKeys is set, possibly empty, on lease_keys only.
+	Event       string     `json:"event"`
+	State       string     `json:"state,omitempty"`
+	Node        string     `json:"node,omitempty"`
+	Addr        string     `json:"addr,omitempty"`
+	Lease       string     `json:"lease,omitempty"`
+	EndsAt      *time.Time `json:"ends_at,omitempty"`
+	ConfirmedAt *time.Time `json:"confirmed_at,omitempty"`
+	// SSHKeys is the complete key set on lease_keys and active lease_state;
+	// an omitted/empty set revokes every renter key.
 	SSHKeys []string `json:"ssh_keys,omitempty"`
 	// Sessions is the number of renter connections open, on sessions
 	// only: the app installs updates while nobody is connected.
 	Sessions *int `json:"sessions,omitempty"`
+}
+
+func leaseEvent(id string, endsAt time.Time, keys []string, confirmedAt time.Time) event {
+	e := event{Event: "lease_state", State: "idle", ConfirmedAt: &confirmedAt}
+	if id != "" {
+		e.State, e.Lease, e.EndsAt = "active", id, &endsAt
+		e.SSHKeys = append([]string{}, keys...)
+	}
+	return e
 }
 
 // eventWriter returns the function that reports events: to standard output

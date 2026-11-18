@@ -41,9 +41,6 @@ public struct VMStore: Sendable {
         return free >> 30
     }
 
-    /// Replaces the current machine with a fresh copy of the base. On APFS
-    /// the copy shares the base's blocks, so it takes a moment and no extra
-    /// space until the renter writes to it.
     /// The lease the current machine belongs to, if a renter has had it.
     /// Kept in the machine's own directory, so a fresh copy has none.
     public var currentLease: String? {
@@ -51,12 +48,21 @@ public struct VMStore: Sendable {
             (try? String(contentsOf: current.directory.appendingPathComponent("lease"), encoding: .utf8))?
                 .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         }
-        nonmutating set {
-            let file = current.directory.appendingPathComponent("lease")
-            if let newValue { try? newValue.write(to: file, atomically: true, encoding: .utf8) } else { try? FileManager.default.removeItem(at: file) }
+    }
+
+    /// Persist ownership before boot; a failed write must never leave a
+    /// renter's disk looking like an unused machine on the next restart.
+    public func assignCurrentLease(_ id: String?) throws {
+        let file = current.directory.appendingPathComponent("lease")
+        if let id {
+            try id.write(to: file, atomically: true, encoding: .utf8)
+        } else if FileManager.default.fileExists(atPath: file.path) {
+            try FileManager.default.removeItem(at: file)
         }
     }
 
+    /// Replaces the current machine with a fresh copy of the base. On APFS
+    /// the copy shares the base's blocks until the renter writes to it.
     public func resetCurrent() throws {
         let fm = FileManager.default
         guard base.exists else { throw VMError.noBaseImage }
@@ -405,6 +411,8 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
 
     /// The machine's filtered network, if it has one.
     public let network: GuestNetwork?
+    private var startTask: Task<Void, Error>?
+    private var stopTask: Task<Void, Never>?
 
     public init(bundle: VMBundle, resources: VMResources, display: Bool = true, network: GuestNetwork? = nil) throws {
         self.bundle = bundle
@@ -415,14 +423,35 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
     }
 
     public func start() async throws {
-        try await machine.start()
+        guard stopTask == nil else { throw CancellationError() }
+        let start = Task { try await machine.start() }
+        startTask = start
+        defer { startTask = nil }
+        try await start.value
     }
 
-    /// Cuts the power. The disk is thrown away after a lease, so there is
-    /// nothing to shut down cleanly for.
+    /// Cuts networking, then power. Return only once the stopped machine
+    /// has released its disk, so the caller can safely replace it.
     public func stop() async {
-        if machine.canStop { try? await machine.stop() }
         network?.stop()
+        if let stopTask { await stopTask.value; return }
+        let starting = startTask
+        let stop = Task {
+            // Virtualization cannot stop a guest in the middle of starting.
+            // Its network is already dead; wait before releasing its disk.
+            _ = try? await starting?.value
+            while machine.state != .stopped && machine.state != .error {
+                if machine.canStop {
+                    do { try await machine.stop() }
+                    catch { NSLog("NodeEx machine: power-off failed, keeping network off and retrying: %@", "\(error)") }
+                }
+                if machine.state != .stopped && machine.state != .error {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
+        }
+        stopTask = stop
+        await stop.value
     }
 
     /// Where the host reaches the machine's SSH: a loopback port when the

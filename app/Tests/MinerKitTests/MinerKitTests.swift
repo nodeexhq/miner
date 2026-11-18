@@ -14,7 +14,7 @@ final class MinerKitTests: XCTestCase {
         echo "args: $*" >&2
         echo '{"event":"node","state":"active","node":"n1"}'
         echo '{"event":"gate","state":"open","addr":"100.64.0.3"}'
-        echo '{"event":"lease_started","lease":"l1","ends_at":"2026-11-14T10:00:00.123456Z"}'
+        echo '{"event":"lease_state","state":"active","lease":"l1","ends_at":"2026-11-14T10:00:00.123456Z","confirmed_at":"2026-11-14T09:00:00.123456Z","ssh_keys":["key-1"]}'
         echo '{"event":"something_new","extra":1}'
         echo 'not json'
         echo '{"event":"lease_ended","lease":"l1"}'
@@ -52,11 +52,13 @@ final class MinerKitTests: XCTestCase {
         lock.lock()
         defer { lock.unlock() }
         let first = Array(events.prefix(5))
-        XCTAssertEqual(first.map(\.event), ["node", "gate", "lease_started", "something_new", "lease_ended"])
+        XCTAssertEqual(first.map(\.event), ["node", "gate", "lease_state", "something_new", "lease_ended"])
         XCTAssertEqual(first[0].state, "active")
         XCTAssertEqual(first[1].addr, "100.64.0.3")
         XCTAssertEqual(first[2].lease, "l1")
         XCTAssertNotNil(first[2].endsAt)
+        XCTAssertNotNil(first[2].confirmedAt)
+        XCTAssertEqual(first[2].sshKeys, ["key-1"])
         XCTAssertTrue(logs.contains { $0.contains("run -events -ssh-target 127.0.0.1:1 -vnc-target 127.0.0.1:2 -dir") }, "\(logs)")
         XCTAssertTrue(logs.contains { $0.hasSuffix("-machine-cpus 8 -machine-memory-gb 12 -machine-disk-gb 140") }, "\(logs)")
         XCTAssertTrue(logs.contains { $0.contains("exited with status 3") })

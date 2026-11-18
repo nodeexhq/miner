@@ -105,7 +105,7 @@ final class LeaseMarkerTests: XCTestCase {
         try Data("disk".utf8).write(to: store.base.disk)
         try store.resetCurrent()
         XCTAssertNil(store.currentLease, "a fresh copy of the base belongs to nobody")
-        store.currentLease = "lease-1"
+        try store.assignCurrentLease("lease-1")
         XCTAssertEqual(store.currentLease, "lease-1")
         // The renter's disk stays while the lease does…
         try Data("renter's files".utf8).write(to: store.current.disk)

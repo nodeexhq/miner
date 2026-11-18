@@ -59,8 +59,8 @@ freshly erased one is recommended. The Miner has nothing to do with cryptocurren
 ## The macOS app (in development)
 
 `app/` holds a menu-bar app that wraps the command-line Miner. It runs the Miner as a child process, and it is where
-per-lease virtual machines are being built: each renter is to get a fresh macOS virtual machine, a copy of a base
-image, which is destroyed when the lease ends and replaced with a new copy. Renters are forwarded to that machine and
+per-lease virtual machines are being built: each renter gets a fresh macOS virtual machine, a copy of a base
+image. It stops without a valid lease; a different lease replaces it with a new copy. Renters are forwarded to that machine and
 never to the owner's own macOS.
 
 This is not finished and is not part of a release yet. It has been run on one Mac: a base machine was installed,
@@ -95,6 +95,44 @@ them. `vmnet/policy.go` is the whole policy.
 
 `nodeex-miner run -events` writes state changes (node status, gate, lease started and ended) to standard output as
 JSON lines; that is how the app follows the Miner.
+
+### VM lease enforcement
+
+The macOS app controls the guest's power and its only network connection on the host. Jump Desktop, UU Remote,
+and other services installed **inside the renter's VM** therefore follow the same lease even when they bypass
+the NodeEx SSH/VNC gate. This does not manage remote access installed on the host. Prepare the base without
+renter accounts, initialized Jump/UU device identities, or remote-access pairing: install/register those agents
+inside each renter's guest so a new disk cannot inherit an earlier device identity or unattended password.
+
+- **Expiry:** the app checks the last confirmed end time every second. At the deadline it cuts the VM's network,
+  then powers it off, even if the Go core or platform is unavailable. The gate's token clock grace does not
+  extend VM runtime.
+- **Early termination:** a successful heartbeat explicitly confirming no lease cuts the old guest's network
+  and powers it off. It never starts an idle guest. Heartbeats normally run every 15 seconds;
+  early termination is observed on the next successful reply, not instantaneously.
+- **Renewal:** every successful heartbeat includes the lease ID, current deadline, and full SSH key set. A renewed
+  deadline for the same lease does not restart or reset its guest. A different lease always gets a clean copy.
+- **Restart:** neither the app nor the host restarting boots a saved renter disk before a fresh platform
+  confirmation. The same active lease resumes its own disk; a different lease replaces it. No lease leaves it off.
+- **Lost confirmation:** a core exit, host sleep, or 180 seconds without a valid successful heartbeat cuts the
+  network and stops the guest, retaining its disk. HTTP error replies do not extend this VM authorization.
+  Recovery requires a fresh confirmation after suspension; if it confirms the same lease, work is preserved.
+
+An expired or temporarily unconfirmed disk stays powered off until the same lease is confirmed again or a
+different lease replaces it. The platform's `lease:null` means no lease is currently valid; after an outage the
+platform may still renew the same expired lease, so null alone must not erase its work. Keeping this one disk
+offline does not grant remote access. Stale, empty, or incomplete replies cannot authorize a start or count as
+proof that there is no lease. Power-off, retries/reboots, and pending starts are serialized before any disk
+replacement. Both wall time and elapsed uptime bound authorization, so a backward host clock correction cannot
+extend a saved deadline. These guarantees
+apply to VMs managed by the menu-bar app, not a VM manually started with the development `nodeex-vm run` command.
+
+Before releasing, test with a disposable renter VM: keep actual Jump/UU sessions open, expire or terminate the
+lease and verify both disconnect; check same-lease renewal preserves a file and avoids a reboot; restart Miner
+with the platform unreachable and check the old VM stays off; then confirm a different lease and check that
+the file and old remote-access pairing are absent. Also check that an expired VM stays off after `lease:null`
+and a later same-lease renewal restores its file. Automated tests use a fake VM and temporary disk markers;
+they do not boot the owner's VM or exercise third-party desktop clients.
 
 ## Layout
 

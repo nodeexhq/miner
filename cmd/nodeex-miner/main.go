@@ -168,7 +168,10 @@ func call(ctx context.Context, api string, priv ed25519.PrivateKey, method, path
 		return err
 	}
 	defer res.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return err
+	}
 	if res.StatusCode >= 300 {
 		var e struct {
 			Error struct{ Code, Message string } `json:"error"`
@@ -178,7 +181,7 @@ func call(ctx context.Context, api string, priv ed25519.PrivateKey, method, path
 		}
 		return &statusError{res.StatusCode, fmt.Sprintf("%s %s: HTTP %d", method, path, res.StatusCode)}
 	}
-	if out != nil && len(raw) > 0 {
+	if out != nil {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
@@ -407,14 +410,7 @@ func cmdRun(args []string) error {
 	lastReached := time.Now()
 	isolated := false
 	heartbeat := func() {
-		var res struct {
-			Status string `json:"status"`
-			Lease  *struct {
-				ID      string    `json:"id"`
-				EndsAt  time.Time `json:"ends_at"`
-				SSHKeys []string  `json:"ssh_keys"`
-			} `json:"lease"`
-		}
+		var res heartbeatResponse
 		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
 		// Every heartbeat carries the Miner's own account of how it is
@@ -480,19 +476,15 @@ func cmdRun(args []string) error {
 			emit(event{Event: "node", State: res.Status, Node: id.NodeID})
 			lastStatus = res.Status
 		}
-		// A node that was waiting for review when the Miner started could
-		// not join the overlay then. Join as soon as it is approved, and
-		// otherwise keep trying now and then.
-		if srv == nil && ctx.Err() == nil && (changed && res.Status == "active" || time.Since(lastJoin) > gateRetryInterval) {
-			if err := openGate(); err != nil {
-				log.Printf("overlay still unavailable: %v", err)
-			}
-		}
 		lease, endsAt := "", time.Time{}
 		var keys []string
 		if res.Lease != nil {
 			lease, endsAt, keys = res.Lease.ID, res.Lease.EndsAt, res.Lease.SSHKeys
 		}
+		// Publish before joining the overlay, which may take a while. The
+		// VM's own network (including third-party remote desktops) is governed
+		// by this snapshot, independently of whether the gate is available.
+		emit(leaseEvent(lease, endsAt, keys, time.Now()))
 		if previous := state.set(lease, endsAt); previous != lease {
 			if previous != "" {
 				log.Printf("lease %s ended; its connections are closed", previous)
@@ -508,6 +500,12 @@ func cmdRun(args []string) error {
 		if joined := strings.Join(keys, "\n"); lease != "" && joined != lastKeys {
 			lastKeys = joined
 			emit(event{Event: "lease_keys", Lease: lease, SSHKeys: append([]string{}, keys...)})
+		}
+		// A pending node may have been approved since the last attempt.
+		if srv == nil && ctx.Err() == nil && (changed && res.Status == "active" || time.Since(lastJoin) > gateRetryInterval) {
+			if err := openGate(); err != nil {
+				log.Printf("overlay still unavailable: %v", err)
+			}
 		}
 	}
 

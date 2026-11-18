@@ -1,14 +1,30 @@
 import Foundation
 
+/// The controller is also exercised with a blocked start/stop in tests,
+/// without constructing a real Virtualization.framework machine.
+@MainActor
+protocol VMRuntime: AnyObject {
+    var onStop: ((Error?) -> Void)? { get set }
+    func disconnect()
+    func start() async throws
+    func stop() async
+    func sshEndpoint(timeout: TimeInterval) async throws -> VMRunner.Endpoint
+}
+
+extension VMRunner: VMRuntime {
+    func disconnect() { network?.stop() }
+}
+
 /// Keeps one fresh virtual machine ready for a renter, keeps it (disk and
 /// all) for that renter through restarts while the lease runs, and replaces
-/// it after the lease: the machine a renter used is destroyed, never handed on.
+/// it for another lease: a renter's used machine is never handed on.
 @MainActor
-public final class MachineController {
+public final class MachineController: LeaseMachine {
     public enum State: Equatable, Sendable {
         /// No base machine has been prepared on this Mac.
         case noBase
         case starting
+        case suspended
         /// The machine answers; the host reaches it at this loopback port.
         case ready(sshPort: UInt16)
         case failed(String)
@@ -26,17 +42,34 @@ public final class MachineController {
 
     private let store: VMStore
     private let resources: VMResources
-    private let helper: URL
-    private var runner: VMRunner?
+    typealias RunnerFactory = (VMBundle, VMResources, @escaping @Sendable () -> Void) throws -> any VMRuntime
+    private let makeRunner: RunnerFactory
+    private var runner: (any VMRuntime)?
     private var generation = 0
     private var wantedKeys: [String] = []
+    private var permitted = false
+    private var authorizedLeaseID: String?
+    private var keyTask: Task<Void, Never>?
+    private var installedKeys: [String]?
+    private var stopTask: Task<Void, Never>?
 
-    public init(store: VMStore = .standard, resources: VMResources = .forThisHost()) throws {
-        self.store = store
-        self.resources = resources
+    public convenience init(store: VMStore = .standard, resources: VMResources = .forThisHost()) throws {
         // A renter's machine is never started on the unfiltered network.
         guard let helper = GuestNetwork.helper() else { throw VMError.unsupportedHost("the nodeex-vmnet helper is missing") }
-        self.helper = helper
+        self.init(store: store, resources: resources) { bundle, resources, onNetworkExit in
+            guard let mac = try? String(contentsOf: bundle.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
+                throw VMError.damagedBundle("MAC address")
+            }
+            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort)
+            network.onExit = onNetworkExit
+            return try VMRunner(bundle: bundle, resources: resources, network: network)
+        }
+    }
+
+    init(store: VMStore, resources: VMResources, makeRunner: @escaping RunnerFactory) {
+        self.store = store
+        self.resources = resources
+        self.makeRunner = makeRunner
     }
 
     /// The size of the machine leases are given: this host's share of
@@ -49,60 +82,29 @@ public final class MachineController {
 
     // A renter keeps their machine for the whole lease: when the app or
     // the Mac restarts, or the renter shuts it down, the same machine (the
-    // same disk) starts again. It is destroyed only when the lease ends,
-    // and the next renter gets a fresh copy of the base.
+    // same disk) starts again. Without authorization it stays off; the
+    // next lease gets a fresh copy of the base.
 
-    /// At launch: the machine of a lease that may still be running is
-    /// started as it is; otherwise a fresh one is made. Whether the lease is
-    /// in fact still running is known after the core's first heartbeat
-    /// (leaseStarted or noLease).
-    public func startAtLaunch() async {
-        if store.currentLease != nil, store.current.exists {
-            await boot(reset: false)
-        } else {
-            await boot(reset: true)
-        }
-    }
-
-    /// A lease is running. A machine nobody has had yet becomes this
-    /// renter's; one that belonged to another lease is replaced first.
-    public func leaseStarted(_ id: String) async {
-        switch store.currentLease {
-        case id?:
-            return
-        case nil where store.current.exists:
-            store.currentLease = id
-        default:
-            await boot(reset: true, for: id)
-        }
-    }
-
-    /// No lease is running (after a restart, the lease may have ended while
-    /// the app was not running): a machine a renter had is replaced.
-    public func noLease() async {
-        if store.currentLease != nil { await renew() }
-    }
-
-    /// The lease ended: the machine that renter used is destroyed and a
-    /// fresh one made for the next.
-    public func renew() async {
-        await boot(reset: true)
+    /// Called only by LeaseSupervisor after a fresh platform confirmation.
+    /// Retain a disk only for the SAME lease. Idle guests are never booted:
+    /// lease:null means no current authorization, not necessarily final expiry.
+    public func run(leaseID: String) async {
+        guard !leaseID.isEmpty else { await suspend(); return }
+        permitted = true
+        authorizedLeaseID = leaseID
+        let reset = !store.current.exists || store.currentLease != leaseID
+        await boot(reset: reset, for: leaseID)
     }
 
     /// Starts a machine: a fresh copy of the base when reset is true (marked
     /// as belonging to lease, if given), otherwise the current one as it is.
-    private func boot(reset: Bool, for lease: String? = nil) async {
+    private func boot(reset: Bool, for lease: String) async {
         generation += 1
         let mine = generation
-        if reset {
-            // The next machine is for the next renter: the last one's keys go.
-            wantedKeys = []
-        }
-        if let old = runner {
-            runner = nil
-            old.onStop = nil
-            await old.stop()
-        }
+        installedKeys = nil
+        state = .starting
+        await stopCurrent()
+        guard generation == mine, permitted else { return }
         guard store.base.exists else {
             state = .noBase
             return
@@ -111,50 +113,47 @@ public final class MachineController {
         do {
             if reset || !store.current.exists {
                 try store.resetCurrent()
-                store.currentLease = lease
-            }
-            guard let mac = try? String(contentsOf: store.current.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
-                throw VMError.damagedBundle("MAC address")
+                try store.assignCurrentLease(lease)
             }
             // The helper forwards the two loopback ports for as long as this
             // machine lives, and applies the outbound rules to it.
-            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort)
-            network.onExit = { [weak self] in
+            let next = try makeRunner(store.current, resources) { [weak self] in
                 Task { @MainActor in
-                    guard let self, self.generation == mine else { return }
+                    guard let self, self.generation == mine, self.permitted else { return }
                     self.state = .failed("the machine's network stopped")
                     self.retry(mine)
                 }
             }
-            let next = try VMRunner(bundle: store.current, resources: resources, network: network)
             next.onStop = { [weak self] error in
-                guard let self, self.generation == mine else { return }
+                guard let self, self.generation == mine, self.permitted else { return }
                 // The renter shut the machine down, or it crashed. During a
-                // lease it starts again with its disk as it was; between
-                // leases a fresh one takes its place.
+                // lease it starts again with its disk as it was.
                 self.state = .failed(error.map { "\($0.localizedDescription)" } ?? "the machine was shut down")
-                Task { await self.restart() }
+                Task { if self.generation == mine, self.permitted { await self.restart() } }
             }
             runner = next
             try await next.start()
-            let endpoint = try await next.sshEndpoint()
-            guard generation == mine else { return }
+            guard generation == mine, permitted else { await next.stop(); return }
+            let endpoint = try await next.sshEndpoint(timeout: 180)
+            guard generation == mine, permitted else { await next.stop(); return }
             state = .ready(sshPort: endpoint.port)
             failures = 0
             NSLog("NodeEx machine: ready%@, SSH on 127.0.0.1:%d", store.currentLease.map { " for lease \($0)" } ?? "", endpoint.port)
             applyKeys()
         } catch {
-            guard generation == mine else { return }
+            guard generation == mine, permitted else { return }
             state = .failed("\(error)")
             NSLog("NodeEx machine: could not be made ready: %@", "\(error)")
             retry(mine)
         }
     }
 
-    /// Starts the machine again: the same one during a lease, a fresh one
-    /// otherwise.
+    /// Restarts only the currently authorized lease's machine.
     private func restart() async {
-        await boot(reset: store.currentLease == nil)
+        guard permitted, let id = authorizedLeaseID else { return }
+        // A failed ownership write must not turn a retry into an unowned
+        // guest. The platform authorization, not disk metadata, selects it.
+        await boot(reset: !store.current.exists || store.currentLease != id, for: id)
     }
 
     /// Consecutive failures to make a machine ready, for spacing out retries.
@@ -169,7 +168,7 @@ public final class MachineController {
         NSLog("NodeEx machine: retrying in %.0f s (failure %d)", delay, failures)
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            guard let self, self.generation == generation else { return }
+            guard let self, self.generation == generation, self.permitted else { return }
             await self.restart()
         }
     }
@@ -183,21 +182,68 @@ public final class MachineController {
     }
 
     private func applyKeys() {
-        guard case .ready(let port) = state, let account = Provisioning.account(store: store) else { return }
+        guard permitted, keyTask == nil, installedKeys != wantedKeys, case .ready(let port) = state,
+              let account = Provisioning.account(store: store) else { return }
         let endpoint = VMRunner.Endpoint(host: "127.0.0.1", port: port)
         let keys = wantedKeys, store = store
-        Task.detached {
-            do {
-                try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
-            } catch {
-                NSLog("NodeEx: could not install the renter's keys: \(error)")
-            }
+        let mine = generation
+        keyTask = Task {
+            let succeeded = await Task.detached {
+                do {
+                    try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
+                    return true
+                } catch {
+                    NSLog("NodeEx: could not install the renter's keys: \(error)")
+                    return false
+                }
+            }.value
+            guard generation == mine else { return }
+            keyTask = nil
+            if succeeded { installedKeys = keys }
+            if wantedKeys != keys { applyKeys() }
         }
     }
 
-    public func shutDown() async {
+    /// Revocation cuts the network before any asynchronous power-off. A
+    /// guest still starting cannot keep Jump/UU or another outbound tunnel.
+    public func interrupt() {
         generation += 1
-        await runner?.stop()
-        runner = nil
+        permitted = false
+        authorizedLeaseID = nil
+        wantedKeys = []
+        installedKeys = nil
+        runner?.onStop = nil
+        runner?.disconnect()
     }
+
+    public func suspend() async {
+        interrupt()
+        state = .suspended
+        await stopCurrent()
+    }
+
+    /// Every path that detaches a runner, including a retry/reboot, publishes
+    /// the pending stop before yielding. Later revocation and starts must
+    /// wait for it even though `runner` is already nil.
+    private func stopCurrent() async {
+        let mine = generation
+        let old = runner
+        old?.onStop = nil
+        old?.disconnect()
+        runner = nil
+        let pendingKeys = keyTask
+        let previousStop = stopTask
+        // A second revocation must wait for the first power-off too, even
+        // after it detached the old runner. Never replace an open disk.
+        let stop = Task {
+            await previousStop?.value
+            await old?.stop()
+            await pendingKeys?.value
+        }
+        stopTask = stop
+        await stop.value
+        if generation == mine { keyTask = nil; stopTask = nil }
+    }
+
+    public func shutDown() async { await suspend() }
 }

@@ -43,10 +43,12 @@ final class MinerModel: ObservableObject {
     private let store = VMStore.standard
     private var core: CoreSupervisor?
     private var machines: MachineController?
+    private var leaseSupervisor: LeaseSupervisor?
+    private var coreGeneration = UUID()
+    private var sleepObserver: NSObjectProtocol?
     private var setupRunner: VMRunner?
     let updates = Updates()
     private var started = false
-    private var checkedLeaseAtLaunch = false
     /// Renter connections open, and when that last changed: an update
     /// during a lease waits until nobody has been connected for a while.
     @Published var sessions = 0
@@ -229,7 +231,9 @@ final class MinerModel: ObservableObject {
             let controller = try MachineController(store: store)
             controller.onChange = { [weak self] state in self?.machine = Self.describe(state) }
             machines = controller
-            Task { await controller.startAtLaunch() }
+            // Old renter disks remain powered off until the platform has
+            // confirmed which lease (if any) is currently entitled to run.
+            leaseSupervisor = LeaseSupervisor(machine: controller)
         } catch {
             machine = "unavailable: \(error)"
         }
@@ -241,9 +245,31 @@ final class MinerModel: ObservableObject {
             sshTarget: "127.0.0.1:\(MachineController.sshPort)",
             vncTarget: "127.0.0.1:\(MachineController.vncPort)",
             machine: machines?.machineSize))
-        supervisor.onRunning = { [weak self] running in Task { @MainActor in self?.coreRunning = running; if !running { self?.gate = "off" } } }
-        supervisor.onLog = { [weak self] line in Task { @MainActor in self?.lastLog = line } }
-        supervisor.onEvent = { [weak self] event in Task { @MainActor in self?.handle(event) } }
+        let generation = UUID()
+        coreGeneration = generation
+        // Preserve callback delivery order: unstructured MainActor tasks
+        // can overtake one another around a core exit/restart.
+        supervisor.onRunning = { [weak self] running in DispatchQueue.main.async {
+            guard let self, self.coreGeneration == generation else { return }
+            self.coreRunning = running
+            if !running {
+                self.gate = "off"
+                self.leaseSupervisor?.suspend()
+            }
+        } }
+        supervisor.onLog = { [weak self] line in DispatchQueue.main.async {
+            guard let self, self.coreGeneration == generation else { return }
+            self.lastLog = line
+        } }
+        supervisor.onEvent = { [weak self] event in DispatchQueue.main.async {
+            guard let self, self.coreGeneration == generation else { return }
+            self.handle(event)
+        } }
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.leaseSupervisor?.suspend() }
+        }
         core = supervisor
         supervisor.start()
     }
@@ -279,16 +305,22 @@ final class MinerModel: ObservableObject {
             try? FileManager.default.removeItem(at: store.base.directory)
             try? FileManager.default.removeItem(at: store.root.appendingPathComponent("account"))
             started = true
-            checkedLeaseAtLaunch = false
             phase = .machineIntro
             NSLog("NodeEx machine: rebuilding at the owner's request")
         }
     }
 
     func stop() async {
+        coreGeneration = UUID()
         core?.stop()
         core = nil
-        await machines?.shutDown()
+        coreRunning = false
+        if let sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(sleepObserver)
+            self.sleepObserver = nil
+        }
+        await leaseSupervisor?.stop()
+        leaseSupervisor = nil
         machines = nil
         await setupRunner?.stop()
         machine = "stopped"
@@ -298,33 +330,18 @@ final class MinerModel: ObservableObject {
         switch event.event {
         case "node":
             nodeStatus = event.state ?? "unknown"
-            // The first heartbeat says whether a lease is running; it is
-            // reported right after this. With none, a machine kept for a
-            // lease that ended while the app was not running is replaced.
-            if !checkedLeaseAtLaunch {
-                checkedLeaseAtLaunch = true
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 10_000_000_000)
-                    if self.lease == nil { await self.machines?.noLease() }
-                }
-            }
-        case "gate": gate = event.state ?? "off"
+        case "gate":
+            gate = event.state ?? "off"
+            if event.state == "suspended" { leaseSupervisor?.suspend() }
         case "sessions":
             sessions = event.sessions ?? 0
             sessionsChanged = Date()
-        case "lease_started":
+        case "lease_state":
+            guard coreRunning, leaseSupervisor?.receive(event) == true else { return }
+            let previous = lease
             lease = event.lease
             leaseEnds = event.endsAt
-            if let id = event.lease, let machines { Task { await machines.leaseStarted(id) } }
-        case "lease_keys":
-            // The renter's way in to the machine this lease was given.
-            machines?.authorize(renterKeys: event.sshKeys ?? [])
-        case "lease_ended":
-            lease = nil
-            leaseEnds = nil
-            updates.leaseEnded()
-            // The machine that renter used is destroyed and replaced.
-            if let machines { Task { await machines.renew() } }
+            if previous != nil, lease == nil { updates.leaseEnded() }
         default: break
         }
     }
@@ -333,6 +350,7 @@ final class MinerModel: ObservableObject {
         switch state {
         case .noBase: return "no base machine prepared"
         case .starting: return "starting a fresh machine"
+        case .suspended: return "stopped, waiting for lease confirmation"
         case .ready: return "ready, on its own filtered network"
         case .failed(let why): return "failed: \(why)"
         }
