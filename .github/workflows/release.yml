@@ -62,6 +62,10 @@ jobs:
           gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NodeEx Miner $TAG" \
             --notes "The command-line Miner and the NodeEx Miner app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
 
+      - name: The app, for a test build
+        if: ${{ contains(github.ref_name, '-') }}
+        run: gh release upload "$TAG" app/dist/NodeEx-Miner-"$TAG".dmg --clobber
+
       - name: Update feed
         # A test build (a tag with a suffix, such as v0.1.16-test.1) is published
         # for trying on one machine; installed apps are not offered it.
