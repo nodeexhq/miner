@@ -46,6 +46,10 @@ func startNode(t *testing.T, ctx context.Context, url, name string) (*tsnet.Serv
 	os.MkdirAll(dir, 0o700)
 	s := &tsnet.Server{Dir: dir, ControlURL: url, Hostname: name, Store: new(mem.Store), Ephemeral: true}
 	t.Cleanup(func() { s.Close() })
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	tuneNode(t, s)
 	st, err := s.Up(ctx)
 	if err != nil {
 		t.Fatal(err)

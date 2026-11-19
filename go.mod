@@ -2,7 +2,10 @@ module github.com/nodeexhq/miner
 
 go 1.27.4
 
-require tailscale.com v1.104.7
+require (
+	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72
+	tailscale.com v1.104.7
+)
 
 require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
@@ -99,6 +102,5 @@ require (
 	golang.org/x/tools v0.52.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect
-	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect
 	honnef.co/go/tools v0.8.1 // indirect
 )
