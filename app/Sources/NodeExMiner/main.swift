@@ -353,6 +353,7 @@ final class MinerModel: ObservableObject {
         case .noBase: return "no base machine prepared"
         case .starting: return "starting a fresh machine"
         case .suspended: return "stopped, waiting for lease confirmation"
+        case .paused: return "paused, waiting for lease confirmation"
         case .ready: return "ready, on its own filtered network"
         case .failed(let why): return "failed: \(why)"
         }

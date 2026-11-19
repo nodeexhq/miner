@@ -133,3 +133,45 @@ func TestWatchLimits(t *testing.T) {
 func contextWithCancel() (context.Context, context.CancelFunc) {
 	return context.WithCancel(context.Background())
 }
+
+func TestHeldConnDropsEverything(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	c := &filteredConn{Conn: a, guestNet: mustCIDR(subnet), home: &homeAddrs{}, gateway: netip.MustParseAddr(gatewayIP)}
+	c.held.Store(true)
+	// Nothing reaches the machine while held: the write is swallowed, so a
+	// reader on the other end never sees it.
+	got := make(chan int, 1)
+	go func() {
+		buf := make([]byte, 2048)
+		n, _ := b.Read(buf)
+		got <- n
+	}()
+	c.Write(packet(gatewayIP, 40000, guestIP, 5900, protoTCP, 200))
+	select {
+	case <-got:
+		t.Fatal("a frame reached the machine while its network was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	// And nothing from the machine gets out: Read skips it and waits.
+	go b.Write(packet(guestIP, 50000, "93.184.215.14", 443, protoTCP, 200))
+	read := make(chan struct{})
+	go func() {
+		buf := make([]byte, 2048)
+		c.Read(buf)
+		close(read)
+	}()
+	select {
+	case <-read:
+		t.Fatal("a frame from the machine got out while held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	c.held.Store(false)
+	go b.Write(packet(guestIP, 50000, "93.184.215.14", 443, protoTCP, 200))
+	select {
+	case <-read:
+	case <-time.After(time.Second):
+		t.Fatal("the network did not come back")
+	}
+}

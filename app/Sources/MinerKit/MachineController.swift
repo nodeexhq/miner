@@ -6,13 +6,20 @@ import Foundation
 protocol VMRuntime: AnyObject {
     var onStop: ((Error?) -> Void)? { get set }
     func disconnect()
+    /// Drop all traffic without ending the network, for a pause.
+    func holdNetwork()
+    func releaseNetwork()
     func start() async throws
+    func pause() async -> Bool
+    func resume() async -> Bool
     func stop() async
     func sshEndpoint(timeout: TimeInterval) async throws -> VMRunner.Endpoint
 }
 
 extension VMRunner: VMRuntime {
     func disconnect() { network?.stop() }
+    func holdNetwork() { network?.hold() }
+    func releaseNetwork() { network?.release() }
 }
 
 /// Keeps one fresh virtual machine ready for a renter, keeps it (disk and
@@ -24,7 +31,11 @@ public final class MachineController: LeaseMachine {
         /// No base machine has been prepared on this Mac.
         case noBase
         case starting
+        /// Off, its disk kept, until the lease is confirmed.
         case suspended
+        /// Frozen with its memory and without network, until the lease is
+        /// confirmed again; powered off if that takes too long.
+        case paused
         /// The machine answers; the host reaches it at this loopback port.
         case ready(sshPort: UInt16)
         case failed(String)
@@ -52,6 +63,25 @@ public final class MachineController: LeaseMachine {
     private var keyTask: Task<Void, Never>?
     private var installedKeys: [String]?
     private var stopTask: Task<Void, Never>?
+
+    // A lease that is not confirmed for a while (the platform is out of
+    // reach, the core restarts, the Mac sleeps, a renewal comes late) need
+    // not cost the renter what is running: the machine is paused, memory
+    // and all, with its network held, and resumes where it was when the
+    // same lease is confirmed. Only after pauseLimit is it powered off.
+    var pauseLimit: TimeInterval = 30 * 60
+    /// The lease whose machine is paused, or being paused.
+    private var pausedLease: String?
+    private var pauseTask: Task<Bool, Never>?
+    /// Advanced by anything that ends a pause, so its power-off timer lapses.
+    private var pauseToken = 0
+    /// The runner has started and answered, so it can be paused.
+    private var running = false
+    /// Which runner the callbacks belong to, and for which generation they
+    /// were (re)attached: a resumed runner keeps its network callback.
+    private var runnerBoot = 0
+    private var handlerGeneration = -1
+    private var sshPortInUse = MachineController.sshPort
 
     public convenience init(store: VMStore = .standard, resources: VMResources = .forThisHost()) throws {
         // A renter's machine is never started on the unfiltered network.
@@ -92,8 +122,47 @@ public final class MachineController: LeaseMachine {
         guard !leaseID.isEmpty else { await suspend(); return }
         permitted = true
         authorizedLeaseID = leaseID
+        if pausedLease == leaseID, store.currentLease == leaseID, let paused = runner {
+            if await resume(paused) { return }
+            guard permitted, authorizedLeaseID == leaseID else { return }
+        }
         let reset = !store.current.exists || store.currentLease != leaseID
         await boot(reset: reset, for: leaseID)
+    }
+
+    /// Brings this lease's paused machine back as it was. False if it could
+    /// not be resumed; it is then started again from its disk.
+    private func resume(_ paused: any VMRuntime) async -> Bool {
+        await pauseTask?.value
+        generation += 1
+        let mine = generation
+        pausedLease = nil
+        pauseToken += 1
+        state = .starting
+        let resumed = await paused.resume()
+        guard generation == mine, permitted, runner === paused else { return false }
+        guard resumed else { return false }
+        attach(paused, generation: mine)
+        paused.releaseNetwork()
+        running = true
+        state = .ready(sshPort: sshPortInUse)
+        failures = 0
+        NSLog("NodeEx machine: resumed for lease %@", authorizedLeaseID ?? "?")
+        applyKeys()
+        return true
+    }
+
+    /// The runner's power-off callback, for the generation now permitted.
+    private func attach(_ runner: any VMRuntime, generation mine: Int) {
+        handlerGeneration = mine
+        runner.onStop = { [weak self] error in
+            guard let self, self.generation == mine, self.permitted else { return }
+            // The renter shut the machine down, or it crashed. During a
+            // lease it starts again with its disk as it was.
+            self.running = false
+            self.state = .failed(error.map { "\($0.localizedDescription)" } ?? "the machine was shut down")
+            Task { if self.generation == mine, self.permitted { await self.restart() } }
+        }
     }
 
     /// Starts a machine: a fresh copy of the base when reset is true (marked
@@ -117,25 +186,24 @@ public final class MachineController: LeaseMachine {
             }
             // The helper forwards the two loopback ports for as long as this
             // machine lives, and applies the outbound rules to it.
+            runnerBoot += 1
+            let boot = runnerBoot
             let next = try makeRunner(store.current, resources) { [weak self] in
                 Task { @MainActor in
-                    guard let self, self.generation == mine, self.permitted else { return }
+                    guard let self, self.runnerBoot == boot, self.handlerGeneration == self.generation, self.permitted else { return }
+                    self.running = false
                     self.state = .failed("the machine's network stopped")
-                    self.retry(mine)
+                    self.retry(self.generation)
                 }
             }
-            next.onStop = { [weak self] error in
-                guard let self, self.generation == mine, self.permitted else { return }
-                // The renter shut the machine down, or it crashed. During a
-                // lease it starts again with its disk as it was.
-                self.state = .failed(error.map { "\($0.localizedDescription)" } ?? "the machine was shut down")
-                Task { if self.generation == mine, self.permitted { await self.restart() } }
-            }
+            attach(next, generation: mine)
             runner = next
             try await next.start()
             guard generation == mine, permitted else { await next.stop(); return }
             let endpoint = try await next.sshEndpoint(timeout: 180)
             guard generation == mine, permitted else { await next.stop(); return }
+            running = true
+            sshPortInUse = endpoint.port
             state = .ready(sshPort: endpoint.port)
             failures = 0
             NSLog("NodeEx machine: ready%@, SSH on 127.0.0.1:%d", store.currentLease.map { " for lease \($0)" } ?? "", endpoint.port)
@@ -233,19 +301,84 @@ public final class MachineController: LeaseMachine {
         wantedKeys = []
         installedKeys = nil
         runner?.onStop = nil
-        runner?.disconnect()
+        // Held, not ended, so that a pause can resume with its network.
+        runner?.holdNetwork()
     }
 
+    /// The lease is not confirmed right now: pause the machine if it is up,
+    /// power it off otherwise. Its disk is kept either way.
     public func suspend() async {
+        interrupt()
+        if pausedLease != nil {
+            _ = await pauseTask?.value
+            if pausedLease != nil { state = .paused }
+            return
+        }
+        guard running, let current = runner, let lease = store.currentLease else {
+            state = .suspended
+            await stopCurrent()
+            return
+        }
+        pausedLease = lease
+        pauseToken += 1
+        let token = pauseToken
+        let pause = Task { await current.pause() }
+        pauseTask = pause
+        let paused = await pause.value
+        if pauseToken == token { pauseTask = nil }
+        guard pauseToken == token, pausedLease == lease, runner === current else { return }
+        guard paused else {
+            pausedLease = nil
+            state = .suspended
+            await stopCurrent()
+            return
+        }
+        running = false
+        state = .paused
+        NSLog("NodeEx machine: paused, waiting for lease %@ to be confirmed", lease)
+        let limit = pauseLimit
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+            guard let self, self.pauseToken == token, self.pausedLease == lease else { return }
+            NSLog("NodeEx machine: lease %@ not confirmed for %.0f minutes; powering off", lease, limit / 60)
+            await self.powerOff()
+        }
+    }
+
+    /// Powers the machine off; its disk is kept.
+    public func powerOff() async {
         interrupt()
         state = .suspended
         await stopCurrent()
+    }
+
+    /// No lease is in force: the last renter's machine is destroyed, disk
+    /// and all, so nothing of theirs stays on the owner's Mac. Called only
+    /// on the platform's confirmation that there is no lease.
+    public func discard() async {
+        interrupt()
+        let mine = generation
+        state = .suspended
+        await stopCurrent()
+        guard generation == mine, !permitted, store.current.exists else { return }
+        do {
+            try store.discardCurrent()
+            NSLog("NodeEx machine: the last renter's machine was destroyed")
+        } catch {
+            NSLog("NodeEx machine: could not destroy the last renter's machine: %@", "\(error)")
+        }
     }
 
     /// Every path that detaches a runner, including a retry/reboot, publishes
     /// the pending stop before yielding. Later revocation and starts must
     /// wait for it even though `runner` is already nil.
     private func stopCurrent() async {
+        // A pause in progress finishes first; a paused machine is stopped
+        // like a running one.
+        _ = await pauseTask?.value
+        pausedLease = nil
+        pauseToken += 1
+        running = false
         let mine = generation
         let old = runner
         old?.onStop = nil
@@ -265,5 +398,5 @@ public final class MachineController: LeaseMachine {
         if generation == mine { keyTask = nil; stopTask = nil }
     }
 
-    public func shutDown() async { await suspend() }
+    public func shutDown() async { await powerOff() }
 }

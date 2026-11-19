@@ -5,8 +5,13 @@ import Foundation
 protocol LeaseMachine: AnyObject {
     /// Synchronously cut network access and invalidate pending starts/retries.
     func interrupt()
-    /// Stop the guest, retaining its disk for a newly confirmed renewal.
+    /// Take the guest off the network and pause it (or stop it), retaining
+    /// its disk and, while paused, its memory, for a renewal.
     func suspend() async
+    /// Power the guest off, retaining its disk.
+    func powerOff() async
+    /// Destroy the guest and its disk: the platform says no lease is held.
+    func discard() async
     /// Resume this lease's disk, or prepare a clean guest for another lease.
     func run(leaseID: String) async
     func authorize(renterKeys: [String])
@@ -103,17 +108,19 @@ public final class LeaseSupervisor {
         machine.interrupt()
         Task { [weak self] in
             guard let self, !stopped, revision == mine else { return }
+            // The platform holds no lease for this node: the lease ended
+            // (one past its end but not yet settled is still reported), so
+            // nothing of the last renter's may stay on the owner's Mac.
+            if next == .idle {
+                await machine.discard()
+                return
+            }
             await machine.suspend()
             guard !stopped, revision == mine, target == next else { return }
             check()
             guard revision == mine else { return }
             machine.authorize(renterKeys: renterKeys)
-            switch next {
-            // The API's lease:null can precede a late renewal after an
-            // outage. Keep the disk quarantined and offline, never boot it.
-            case .idle: break
-            case .lease(let id): await machine.run(leaseID: id)
-            }
+            if case .lease(let id) = next { await machine.run(leaseID: id) }
         }
         return true
     }
@@ -149,7 +156,7 @@ public final class LeaseSupervisor {
         monotonicDeadline = nil
         revision += 1
         machine.interrupt()
-        await machine.suspend()
+        await machine.powerOff()
     }
 
     deinit { timer?.invalidate() }

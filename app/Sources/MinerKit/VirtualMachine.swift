@@ -61,6 +61,13 @@ public struct VMStore: Sendable {
         }
     }
 
+    /// Deletes the current machine. The next lease gets a fresh copy.
+    public func discardCurrent() throws {
+        if FileManager.default.fileExists(atPath: current.directory.path) {
+            try FileManager.default.removeItem(at: current.directory)
+        }
+    }
+
     /// Replaces the current machine with a fresh copy of the base. On APFS
     /// the copy shares the base's blocks until the renter writes to it.
     public func resetCurrent() throws {
@@ -430,6 +437,21 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
         try await start.value
     }
 
+    /// Freezes the machine with its memory, for a lease that may be
+    /// confirmed again; false if it cannot be paused now (it is starting or
+    /// stopping), in which case the caller powers it off.
+    public func pause() async -> Bool {
+        guard stopTask == nil, startTask == nil, machine.canPause else { return false }
+        do { try await machine.pause(); return true }
+        catch { NSLog("NodeEx machine: could not pause: %@", "\(error)"); return false }
+    }
+
+    public func resume() async -> Bool {
+        guard stopTask == nil, machine.canResume else { return false }
+        do { try await machine.resume(); return true }
+        catch { NSLog("NodeEx machine: could not resume: %@", "\(error)"); return false }
+    }
+
     /// Cuts networking, then power. Return only once the stopped machine
     /// has released its disk, so the caller can safely replace it.
     public func stop() async {
@@ -441,6 +463,11 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
             // Its network is already dead; wait before releasing its disk.
             _ = try? await starting?.value
             while machine.state != .stopped && machine.state != .error {
+                // A paused machine that cannot be stopped as it is is
+                // resumed first; its network is already gone.
+                if machine.state == .paused, !machine.canStop, machine.canResume {
+                    try? await machine.resume()
+                }
                 if machine.canStop {
                     do { try await machine.stop() }
                     catch { NSLog("NodeEx machine: power-off failed, keeping network off and retrying: %@", "\(error)") }

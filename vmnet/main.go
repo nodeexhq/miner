@@ -33,6 +33,11 @@ const (
 )
 
 func main() {
+	// The app holds the machine's network while its lease is not confirmed
+	// (SIGUSR1) and lets it go again (SIGUSR2). Registered first: before
+	// this, SIGUSR1 would end the helper, which also leaves no network.
+	holds := make(chan os.Signal, 8)
+	signal.Notify(holds, syscall.SIGUSR1, syscall.SIGUSR2)
 	mac := flag.String("mac", "", "the machine's MAC address")
 	sshListen := flag.String("ssh-listen", "127.0.0.1:22022", "host address forwarded to the machine's SSH")
 	vncListen := flag.String("vnc-listen", "127.0.0.1:25900", "host address forwarded to the machine's remote desktop")
@@ -96,6 +101,14 @@ func main() {
 	home := &homeAddrs{}
 	go watchHome(ctx, *api, home)
 	filtered := &filteredConn{Conn: conn, guestNet: mustCIDR(subnet), home: home, gateway: netip.MustParseAddr(gatewayIP)}
+	go func() {
+		for s := range holds {
+			held := s == syscall.SIGUSR1
+			if filtered.held.Swap(held) != held {
+				log.Printf("network held: %v", held)
+			}
+		}
+	}()
 	if *limitsFile != "" {
 		go watchLimits(ctx, *limitsFile, &filtered.up, &filtered.down)
 	}

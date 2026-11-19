@@ -62,6 +62,15 @@ public final class GuestNetwork: @unchecked Sendable {
     /// network and should be replaced.
     public var onExit: (@Sendable () -> Void)?
 
+    /// Drops all of the machine's traffic, both ways, until release: the
+    /// helper holds the network while the lease is not confirmed.
+    public func hold() { signal(SIGUSR1) }
+    public func release() { signal(SIGUSR2) }
+
+    private func signal(_ number: Int32) {
+        if process.isRunning { kill(process.processIdentifier, number) }
+    }
+
     public func stop() {
         onExit = nil
         if process.isRunning { process.terminate() }

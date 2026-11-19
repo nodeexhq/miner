@@ -138,6 +138,117 @@ final class MachineControllerTests: XCTestCase {
         guard case .failed = controller.state else { return XCTFail("ownership failure must stop boot") }
         await controller.suspend()
     }
+
+    private func controller(_ store: VMStore, _ guests: Ref<[ControlledVM]>) -> MachineController {
+        MachineController(store: store, resources: .forThisHost()) { _, _, _ in
+            let guest = ControlledVM()
+            guests.value.append(guest)
+            return guest
+        }
+    }
+
+    func testSuspensionPausesAndTheSameLeaseResumesWhereItWas() async throws {
+        let store = try store()
+        let guests = Ref<[ControlledVM]>([])
+        let controller = controller(store, guests)
+        await controller.run(leaseID: "lease-1")
+        try Data("a build in progress".utf8).write(to: store.current.disk)
+        let guest = try XCTUnwrap(guests.value.first)
+        await controller.suspend()
+        XCTAssertTrue(guest.paused)
+        XCTAssertFalse(guest.stopped, "a pause keeps what is running")
+        XCTAssertFalse(guest.networkConnected, "no traffic while the lease is not confirmed")
+        XCTAssertEqual(controller.state, .paused)
+        await controller.run(leaseID: "lease-1")
+        XCTAssertEqual(guests.value.count, 1, "resumed, not started again")
+        XCTAssertEqual(guest.resumes, 1)
+        XCTAssertTrue(guest.networkConnected)
+        XCTAssertEqual(controller.state, .ready(sshPort: MachineController.sshPort))
+        XCTAssertEqual(try String(contentsOf: store.current.disk, encoding: .utf8), "a build in progress")
+        // Its callbacks work again: a shutdown by the renter restarts it.
+        guest.onStop?(nil)
+        await settle()
+        XCTAssertEqual(guests.value.count, 2)
+        await controller.powerOff()
+    }
+
+    func testAPauseThatLastsTooLongPowersOff() async throws {
+        let store = try store()
+        let guests = Ref<[ControlledVM]>([])
+        let controller = controller(store, guests)
+        controller.pauseLimit = 0.2
+        await controller.run(leaseID: "lease-1")
+        let guest = try XCTUnwrap(guests.value.first)
+        await controller.suspend()
+        // Suspensions keep coming while the lease is unconfirmed; they must
+        // not push the power-off back.
+        try await Task.sleep(nanoseconds: 120_000_000)
+        await controller.suspend()
+        XCTAssertFalse(guest.stopped)
+        try await Task.sleep(nanoseconds: 250_000_000)
+        await settle()
+        XCTAssertTrue(guest.stopped)
+        XCTAssertEqual(controller.state, .suspended)
+        XCTAssertTrue(store.current.exists, "powered off, disk kept for a renewal")
+        // Confirmed later after all: started again from the same disk.
+        await controller.run(leaseID: "lease-1")
+        XCTAssertEqual(guests.value.count, 2)
+        XCTAssertEqual(store.currentLease, "lease-1")
+        await controller.powerOff()
+    }
+
+    func testAnotherLeaseNeverResumesThePausedMachine() async throws {
+        let store = try store()
+        let guests = Ref<[ControlledVM]>([])
+        let controller = controller(store, guests)
+        await controller.run(leaseID: "lease-1")
+        try Data("first renter's files".utf8).write(to: store.current.disk)
+        let first = try XCTUnwrap(guests.value.first)
+        await controller.suspend()
+        await controller.run(leaseID: "lease-2")
+        XCTAssertTrue(first.stopped)
+        XCTAssertEqual(first.resumes, 0)
+        XCTAssertEqual(guests.value.count, 2)
+        XCTAssertEqual(store.currentLease, "lease-2")
+        XCTAssertEqual(try String(contentsOf: store.current.disk, encoding: .utf8), "clean base")
+        await controller.powerOff()
+    }
+
+    func testDiscardDestroysThePausedMachine() async throws {
+        let store = try store()
+        let guests = Ref<[ControlledVM]>([])
+        let controller = controller(store, guests)
+        await controller.run(leaseID: "lease-1")
+        let guest = try XCTUnwrap(guests.value.first)
+        await controller.suspend()
+        await controller.discard()
+        XCTAssertTrue(guest.stopped)
+        XCTAssertFalse(store.current.exists, "nothing of the renter's stays on the owner's Mac")
+        XCTAssertNil(store.currentLease)
+        // The next lease gets a fresh copy.
+        await controller.run(leaseID: "lease-2")
+        XCTAssertEqual(try String(contentsOf: store.current.disk, encoding: .utf8), "clean base")
+        await controller.powerOff()
+    }
+
+    func testAMachineThatCannotPauseIsPoweredOff() async throws {
+        let store = try store()
+        let guests = Ref<[ControlledVM]>([])
+        let controller = controller(store, guests)
+        await controller.run(leaseID: "lease-1")
+        let guest = try XCTUnwrap(guests.value.first)
+        guest.canPause = false
+        await controller.suspend()
+        XCTAssertTrue(guest.stopped)
+        XCTAssertEqual(controller.state, .suspended)
+        XCTAssertTrue(store.current.exists)
+    }
+}
+
+@MainActor
+private final class Ref<T> {
+    var value: T
+    init(_ value: T) { self.value = value }
 }
 
 @MainActor
@@ -152,9 +263,26 @@ private final class ControlledVM: VMRuntime {
     private var startWaiter: CheckedContinuation<Void, Never>?
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
 
+    var paused = false
+    var canPause = true
+    var pauses = 0, resumes = 0
     func disconnect() { networkConnected = false }
+    func holdNetwork() { networkConnected = false }
+    func releaseNetwork() { networkConnected = true }
     func start() async throws {
         if holdStart { await withCheckedContinuation { startWaiter = $0 } }
+    }
+    func pause() async -> Bool {
+        guard canPause, !stopped, !startPending else { return false }
+        pauses += 1
+        paused = true
+        return true
+    }
+    func resume() async -> Bool {
+        guard paused, !stopped else { return false }
+        resumes += 1
+        paused = false
+        return true
     }
     func stop() async {
         disconnect()

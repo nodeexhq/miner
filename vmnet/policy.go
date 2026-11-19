@@ -101,6 +101,10 @@ type filteredConn struct {
 	guestNet netip.Prefix
 	home     *homeAddrs
 	gateway  netip.Addr
+	// held drops every frame both ways while the machine's lease is not
+	// confirmed; the machine is paused then, and this covers the moment
+	// before it is.
+	held     atomic.Bool
 	up, down bucket
 	dropped  atomic.Uint64
 	// Frames dropped for going over the bandwidth limits, each way.
@@ -112,6 +116,9 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 		n, err := c.Conn.Read(b)
 		if err != nil {
 			return n, err
+		}
+		if c.held.Load() {
+			continue
 		}
 		if !allowed(b[:n], c.guestNet, c.home.list()) {
 			c.dropped.Add(1)
@@ -128,6 +135,9 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 // Write carries a frame to the machine, unless it is over the limit; a
 // dropped frame is reported as written, as a full link would lose it.
 func (c *filteredConn) Write(b []byte) (int, error) {
+	if c.held.Load() {
+		return len(b), nil
+	}
 	if metered(b, false, c.gateway) && !c.down.allow(len(b), time.Now()) {
 		c.limitedDown.Add(1)
 		return len(b), nil

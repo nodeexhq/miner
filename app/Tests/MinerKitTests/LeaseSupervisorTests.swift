@@ -34,7 +34,7 @@ final class LeaseSupervisorTests: XCTestCase {
         await supervisor.stop()
     }
 
-    func testEarlyTerminationQuarantinesTheGuestAndNewLeaseResetsIt() async throws {
+    func testEndedLeaseDestroysTheGuestAndNewLeaseGetsAFreshOne() async throws {
         let machine = FakeLeaseMachine()
         let supervisor = LeaseSupervisor(machine: machine, now: { self.clock }, automaticallyCheck: false)
         supervisor.receive(try snapshot(keys: ["key-1"]))
@@ -44,8 +44,10 @@ final class LeaseSupervisorTests: XCTestCase {
         supervisor.receive(try snapshot(nil))
         XCTAssertFalse(machine.online, "network revocation is synchronous, before power-off awaits")
         await settle()
-        XCTAssertEqual(machine.lease, "lease-1")
-        XCTAssertEqual(machine.disk, "Jump, UU, renter data")
+        // The platform reports a lease until it is settled, so none means
+        // ended: nothing of the renter's stays on the owner's Mac.
+        XCTAssertNil(machine.lease)
+        XCTAssertEqual(machine.disk, "destroyed")
         XCTAssertEqual(machine.keys, [])
         XCTAssertFalse(machine.online, "lease:null never authorizes an idle boot")
         clock.addTimeInterval(15)
@@ -208,13 +210,14 @@ final class LeaseSupervisorTests: XCTestCase {
         await supervisor.stop()
     }
 
-    func testIdleConfirmationAfterRestartKeepsPreviousTenantDiskOffline() async throws {
+    func testIdleConfirmationAfterRestartDestroysPreviousTenantDisk() async throws {
+        // The lease ended while the app was not running.
         let machine = FakeLeaseMachine(lease: "lease-1", disk: "old credentials")
         let supervisor = LeaseSupervisor(machine: machine, now: { self.clock }, automaticallyCheck: false)
         supervisor.receive(try snapshot(nil))
         await settle()
-        XCTAssertEqual(machine.lease, "lease-1")
-        XCTAssertEqual(machine.disk, "old credentials")
+        XCTAssertNil(machine.lease)
+        XCTAssertEqual(machine.disk, "destroyed")
         XCTAssertFalse(machine.online)
         await supervisor.stop()
     }
@@ -264,7 +267,7 @@ final class LeaseSupervisorTests: XCTestCase {
         await supervisor.stop()
     }
 
-    func testLateRenewalAfterAnIdleReplyPreservesTheSameDisk() async throws {
+    func testLateRenewalOfALeasePastItsEndPreservesTheSameDisk() async throws {
         let machine = FakeLeaseMachine()
         let supervisor = LeaseSupervisor(machine: machine, now: { self.clock }, automaticallyCheck: false)
         supervisor.receive(try snapshot(end: clock.addingTimeInterval(5)))
@@ -272,8 +275,10 @@ final class LeaseSupervisorTests: XCTestCase {
         machine.disk = "unfinished work"
         clock.addTimeInterval(5)
         supervisor.check()
+        // Until the platform renews or ends it, it reports the lease with
+        // its end in the past: the machine stays off, and kept.
         clock.addTimeInterval(1)
-        supervisor.receive(try snapshot(nil))
+        XCTAssertFalse(supervisor.receive(try snapshot(end: clock.addingTimeInterval(-1))))
         await settle()
         XCTAssertFalse(machine.online)
         XCTAssertEqual(machine.disk, "unfinished work")
@@ -302,6 +307,13 @@ private final class FakeLeaseMachine: LeaseMachine {
     func suspend() async {
         online = false
         if holdStop { await withCheckedContinuation { stops.append($0) } }
+    }
+    func powerOff() async { online = false }
+    func discard() async {
+        online = false
+        if holdStop { await withCheckedContinuation { stops.append($0) } }
+        lease = nil
+        disk = "destroyed"
     }
     func run(leaseID: String) async {
         if lease != leaseID { disk = "clean base" }
