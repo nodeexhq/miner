@@ -77,6 +77,10 @@ public enum Provisioning {
     /// kept by nobody. Renters get their own account.
     static let setupAccount = "nodeex"
 
+    /// Where the base machine keeps the installers of the remote desktops
+    /// offered to renters (Jump Desktop Connect, UU Remote).
+    static let installersDirectory = "/Users/Shared/NodeEx"
+
     /// What a new machine runs once, as root, at its first boot: it makes
     /// the account, turns on Remote Login and Screen Sharing, marks Setup
     /// Assistant as done, removes its own trigger and shuts down. It logs
@@ -97,6 +101,30 @@ public enum Provisioning {
     /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist
     /bin/launchctl enable system/com.apple.screensharing
     /bin/launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist
+    # Remote desktops that do well on a slow line, for renters who want one:
+    # the vendors' own installers, fetched from them and kept only if they
+    # carry the vendor's Apple-notarized signature. Each renter's machine
+    # installs them when it is made, so no two share a device identity.
+    D=\(installersDirectory)
+    /bin/mkdir -p $D
+    keep() { # file, vendor's team
+      if /usr/sbin/pkgutil --check-signature "$1" | /usr/bin/grep -q "($2)" && /usr/sbin/spctl -a -t install "$1"; then
+        /bin/chmod 644 "$1"
+      else
+        /bin/rm -f "$1"
+      fi
+    }
+    if /usr/bin/curl -fsSL --retry 2 -m 240 -o /tmp/jump.dmg https://jumpdesktop.com/downloads/connect/mac &&
+       /usr/bin/hdiutil attach -nobrowse -readonly -quiet /tmp/jump.dmg -mountpoint /tmp/jump; then
+      /bin/cp /tmp/jump/.jdc.sparkle_guided.pkg "$D/JumpDesktopConnect.pkg" || /bin/cp /tmp/jump/*.pkg "$D/JumpDesktopConnect.pkg"
+      /usr/bin/hdiutil detach -quiet /tmp/jump
+      keep "$D/JumpDesktopConnect.pkg" 2HCKV38EEC
+    fi
+    /bin/rm -f /tmp/jump.dmg
+    if /usr/bin/curl -fsSL --retry 2 -m 240 -o "$D/UURemote.pkg" "https://api.nrd.nie.163.com/api/v1/release/dl/4?channel=gwqd"; then
+      keep "$D/UURemote.pkg" PU9BNSBJW7
+    fi
+    ls -l $D
     /usr/bin/touch /private/var/db/.AppleSetupDone
     /bin/rm -f /private/etc/crontab
     /usr/bin/touch /private/var/db/.nodeex-firstboot-done
@@ -191,6 +219,9 @@ public enum Provisioning {
         if ! /usr/bin/id \(user) >/dev/null 2>&1; then
           sudo -n /usr/sbin/sysadminctl -addUser \(user) -fullName Renter -admin -password "$(/usr/bin/openssl rand -base64 24)" >/dev/null 2>&1
           \(lowBandwidthDefaults(user))
+          # The remote desktops kept in the base are installed for this
+          # renter, in the background: the account does not wait for them.
+          sudo -n /usr/bin/nohup /bin/sh -c 'for p in \(installersDirectory)/*.pkg; do [ -f "$p" ] && /usr/sbin/installer -pkg "$p" -target /; done' >/dev/null 2>&1 &
         fi
         sudo -n /bin/mkdir -p /Users/\(user)/.ssh
         sudo -n /usr/bin/tee /Users/\(user)/.ssh/authorized_keys >/dev/null

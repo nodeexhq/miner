@@ -172,7 +172,7 @@ final class MinerModel: ObservableObject {
 
     /// How long the machine is given to set itself up before a person is
     /// asked to do it.
-    static let automaticSetupLimit: TimeInterval = 10 * 60
+    static let automaticSetupLimit: TimeInterval = 20 * 60
     private var triedAutomaticSetup = false
 
     /// The machine's first-run setup without a person: the host writes a

@@ -143,9 +143,22 @@ final class FirstRunScriptTests: XCTestCase {
         XCTAssertTrue(s.hasPrefix("#!/bin/sh\n"))
         XCTAssertTrue(s.contains("U=nodeex\n"))
         for step in ["sysadminctl -addUser $U", "openssl rand", "system/com.openssh.sshd", "system/com.apple.screensharing",
-                     ".AppleSetupDone", "rm -f /private/etc/crontab", "shutdown -h now"] {
+                     ".AppleSetupDone", "rm -f /private/etc/crontab", "shutdown -h now",
+                     "D=/Users/Shared/NodeEx\n", "2HCKV38EEC", "PU9BNSBJW7", "spctl -a -t install"] {
             XCTAssertTrue(s.contains(step), step)
         }
         XCTAssertFalse(s.contains("    #!/"), "the script must not be indented")
+    }
+
+    func testScriptIsValidShell() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("firstrun-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Provisioning.firstRunScript.write(to: file, atomically: true, encoding: .utf8)
+        let sh = Process()
+        sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+        sh.arguments = ["-n", file.path]
+        try sh.run()
+        sh.waitUntilExit()
+        XCTAssertEqual(sh.terminationStatus, 0)
     }
 }
