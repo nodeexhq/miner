@@ -35,6 +35,7 @@ func main() {
 	mac := flag.String("mac", "", "the machine's MAC address")
 	sshListen := flag.String("ssh-listen", "127.0.0.1:22022", "host address forwarded to the machine's SSH")
 	vncListen := flag.String("vnc-listen", "127.0.0.1:25900", "host address forwarded to the machine's remote desktop")
+	api := flag.String("api", "https://app.nodeex.com", "platform API, asked for the owner's public address")
 	flag.Parse()
 	hw, err := net.ParseMAC(*mac)
 	if err != nil {
@@ -90,7 +91,9 @@ func main() {
 		}
 	}()
 
-	filtered := &filteredConn{Conn: conn, guestNet: mustCIDR(subnet)}
+	home := &homeAddrs{}
+	go watchHome(ctx, *api, home)
+	filtered := &filteredConn{Conn: conn, guestNet: mustCIDR(subnet), home: home}
 	done := make(chan error, 1)
 	go func() { done <- vn.AcceptVfkit(ctx, filtered) }()
 	select {

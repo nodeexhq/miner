@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 	"net/netip"
+	"slices"
 	"sync/atomic"
 )
 
@@ -39,7 +40,9 @@ const (
 
 // allowed reports whether an Ethernet frame sent by the machine may go on.
 // guestNet is the machine's own network.
-func allowed(frame []byte, guestNet netip.Prefix) bool {
+// home lists the owner's own public addresses, refused like the owner's
+// local network.
+func allowed(frame []byte, guestNet netip.Prefix, home []netip.Addr) bool {
 	if len(frame) < 14 {
 		return false
 	}
@@ -64,6 +67,9 @@ func allowed(frame []byte, guestNet netip.Prefix) bool {
 	if dst == netip.AddrFrom4([4]byte{255, 255, 255, 255}) {
 		// DHCP, and only that.
 		return ip[9] == protoUDP && len(ip) >= ihl+4 && binary.BigEndian.Uint16(ip[ihl+2:ihl+4]) == 67
+	}
+	if slices.Contains(home, dst) {
+		return false
 	}
 	if !guestNet.Contains(dst) {
 		for _, n := range refusedNets {
@@ -92,6 +98,7 @@ func allowed(frame []byte, guestNet netip.Prefix) bool {
 type filteredConn struct {
 	net.Conn
 	guestNet netip.Prefix
+	home     *homeAddrs
 	dropped  atomic.Uint64
 }
 
@@ -101,7 +108,7 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		if allowed(b[:n], c.guestNet) {
+		if allowed(b[:n], c.guestNet, c.home.list()) {
 			return n, nil
 		}
 		c.dropped.Add(1)

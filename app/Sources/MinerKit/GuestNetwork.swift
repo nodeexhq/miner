@@ -32,6 +32,11 @@ public final class GuestNetwork: @unchecked Sendable {
         let helperEnd = FileHandle(fileDescriptor: fds[1], closeOnDealloc: true)
         process.executableURL = helper
         process.arguments = ["-mac", macAddress, "-ssh-listen", "127.0.0.1:\(sshPort)", "-vnc-listen", "127.0.0.1:\(vncPort)"]
+        // The helper asks the platform for this Mac's public address, to
+        // refuse it to the machine; the same platform the app talks to.
+        if let api = ProcessInfo.processInfo.environment["NODEEX_API"], !api.isEmpty {
+            process.arguments! += ["-api", api]
+        }
         process.standardInput = helperEnd
         process.standardOutput = FileHandle.nullDevice
         // What the helper says goes to the system log, where an owner (or

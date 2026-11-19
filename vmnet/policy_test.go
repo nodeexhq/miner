@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"testing"
 )
@@ -51,22 +54,74 @@ func TestPolicy(t *testing.T) {
 		{"truncated", make([]byte, 10), false},
 	}
 	for _, c := range cases {
-		if got := allowed(c.f, guest); got != c.want {
+		if got := allowed(c.f, guest, nil); got != c.want {
 			t.Errorf("%s: allowed = %v, want %v", c.name, got, c.want)
 		}
 	}
 	arp := make([]byte, 42)
 	binary.BigEndian.PutUint16(arp[12:], etherARP)
-	if !allowed(arp, guest) {
+	if !allowed(arp, guest, nil) {
 		t.Error("ARP refused")
 	}
 	v6 := make([]byte, 60)
 	binary.BigEndian.PutUint16(v6[12:], 0x86dd)
-	if allowed(v6, guest) {
+	if allowed(v6, guest, nil) {
 		t.Error("IPv6 allowed")
 	}
 	short := frame("93.184.215.14", protoTCP, 443, 0)[:14+20+2]
-	if allowed(short, guest) {
+	if allowed(short, guest, nil) {
 		t.Error("a TCP packet without its ports was allowed")
+	}
+}
+
+func TestHomeAddressRefused(t *testing.T) {
+	guest := netip.MustParsePrefix(subnet)
+	home := &homeAddrs{}
+	to := frame("203.0.113.7", protoTCP, 443, 0)
+	if !allowed(to, guest, home.list()) {
+		t.Fatal("a public address is refused before it is known as home")
+	}
+	home.add(netip.MustParseAddr("203.0.113.7"))
+	if allowed(to, guest, home.list()) {
+		t.Error("the owner's public address is allowed")
+	}
+	if !allowed(frame("203.0.113.8", protoTCP, 443, 0), guest, home.list()) {
+		t.Error("a neighbouring public address is refused")
+	}
+	// The address changes: the old one stays refused for a while.
+	for _, a := range []string{"198.51.100.1", "198.51.100.2", "198.51.100.3"} {
+		home.add(netip.MustParseAddr(a))
+	}
+	if allowed(to, guest, home.list()) {
+		t.Error("a recent home address stopped being refused")
+	}
+	if home.add(netip.MustParseAddr("198.51.100.3")) {
+		t.Error("the same address counted as new")
+	}
+	home.add(netip.MustParseAddr("198.51.100.4"))
+	if l := home.list(); len(l) != keepHome || l[0] != netip.MustParseAddr("198.51.100.4") {
+		t.Errorf("list = %v", l)
+	}
+}
+
+func TestLookupHome(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/ip" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"ip":"::ffff:203.0.113.7"}`))
+	}))
+	defer srv.Close()
+	a, err := lookupHome(context.Background(), srv.URL+"/")
+	if err != nil || a != netip.MustParseAddr("203.0.113.7") {
+		t.Fatalf("got %v, %v", a, err)
+	}
+	v6 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"ip":"2001:db8::1"}`))
+	}))
+	defer v6.Close()
+	if _, err := lookupHome(context.Background(), v6.URL); err == nil {
+		t.Error("an IPv6 answer was taken")
 	}
 }
