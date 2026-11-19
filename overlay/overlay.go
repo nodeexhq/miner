@@ -14,6 +14,10 @@ import (
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 	"tailscale.com/tsnet"
+	"tailscale.com/wgengine/netstack"
+
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
 )
 
 // Config is the common overlay configuration, registered as flags.
@@ -52,6 +56,28 @@ func Start(ctx context.Context, c Config, logf func(string, ...any)) (*tsnet.Ser
 	}
 	if c.Verbose {
 		srv.Logf = logf
+	}
+	// A trial, not a default: one TCP flow over the overlay falls to a third
+	// of a Wi-Fi link's rate at half a percent of loss or reordering with the
+	// stack's CUBIC, and Reno does about 1.6 times better there, at half the
+	// rate on a loss-free link (tunnel/impaired_test.go). NODEEX_TCP_CC picks
+	// the algorithm so the two can be compared on a real line.
+	if cc := os.Getenv("NODEEX_TCP_CC"); cc != "" {
+		if err := srv.Start(); err != nil {
+			srv.Close()
+			return nil, fmt.Errorf("start overlay: %w", err)
+		}
+		ns, ok := srv.Sys().Netstack.Get().(*netstack.Impl)
+		if !ok {
+			srv.Close()
+			return nil, errors.New("NODEEX_TCP_CC: the overlay has no network stack to set it on")
+		}
+		opt := tcpip.CongestionControlOption(cc)
+		if err := ns.SetTransportProtocolOption(tcp.ProtocolNumber, &opt); err != nil {
+			srv.Close()
+			return nil, fmt.Errorf("NODEEX_TCP_CC=%s: %v", cc, err)
+		}
+		logf("overlay TCP congestion control: %s", cc)
 	}
 	st, err := srv.Up(ctx)
 	if err != nil {
