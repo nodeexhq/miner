@@ -17,9 +17,18 @@ import (
 // it is what a renter feels first, and it is light. Everything else counts,
 // including SSH, since a copy over SSH uses the owner's line like any other.
 //
-// The limit polices rather than queues: a frame over the limit is dropped
-// and TCP slows down, so nothing waits behind a bulk transfer, the remote
-// desktop least of all.
+// The two directions are held differently, because the two senders differ.
+//
+// What the machine sends is policed: a frame over the limit is dropped and
+// the machine's own TCP slows down, so nothing waits behind a bulk transfer.
+//
+// What the machine receives is paced: the frame is delivered when the limit
+// has room for it. The sender here is the virtual network's own TCP, right
+// next to the machine with no delay in between; dropping its frames made it
+// collapse (measured on a Mac mini: 9 Mbit/s under a 105 Mbit/s limit, 146
+// with none). Frames are written to the machine one at a time, so waiting
+// here holds the senders back directly, and a frame that does not count
+// waits at most for the one ahead of it.
 
 const remoteDesktopPort = 5900
 
@@ -57,6 +66,25 @@ func (b *bucket) allow(n int, now time.Time) bool {
 	}
 	b.tokens -= float64(n)
 	return true
+}
+
+// delay takes n bytes from the bucket, going into debt if it must, and
+// returns how long the caller should wait before sending them.
+func (b *bucket) delay(n int, now time.Time) time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.rate <= 0 {
+		return 0
+	}
+	if !b.last.IsZero() {
+		b.tokens = min(b.burst, b.tokens+now.Sub(b.last).Seconds()*b.rate)
+	}
+	b.last = now
+	b.tokens -= float64(n)
+	if b.tokens >= 0 {
+		return 0
+	}
+	return time.Duration(-b.tokens / b.rate * float64(time.Second))
 }
 
 // metered reports whether a frame counts against the limits. out is true

@@ -127,7 +127,7 @@ func main() {
 		log.Printf("refused %d frames from the machine", n)
 	}
 	if u, d := filtered.limitedUp.Load(), filtered.limitedDown.Load(); u+d > 0 {
-		log.Printf("dropped %d frames out and %d in over the bandwidth limits", u, d)
+		log.Printf("bandwidth limits: dropped %d frames out, paced %d in", u, d)
 	}
 }
 

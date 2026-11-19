@@ -74,34 +74,65 @@ func TestMetered(t *testing.T) {
 	}
 }
 
+func TestDelayPaces(t *testing.T) {
+	var b bucket
+	if b.delay(1<<30, time.Now()) != 0 {
+		t.Fatal("no limit made a frame wait")
+	}
+	b.set(8) // 1 MB/s, a 256 KiB burst
+	now := time.Unix(1000, 0)
+	b.delay(0, now)
+	// A sender with no delay of its own, as the virtual network's TCP is:
+	// each frame goes as soon as the one before it was let through.
+	sent := 0
+	start := now
+	for sent < 3_000_000 {
+		now = now.Add(b.delay(1500, now))
+		sent += 1500
+	}
+	took := now.Sub(start).Seconds()
+	if took < 2.6 || took > 3.0 { // 3 MB less the burst, at 1 MB/s
+		t.Errorf("3 MB took %.2f s at 1 MB/s", took)
+	}
+}
+
 func TestLimitedConn(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
 	c := &filteredConn{Conn: a, guestNet: mustCIDR(subnet), home: &homeAddrs{}, gateway: netip.MustParseAddr(gatewayIP)}
-	c.down.set(8)
+	c.down.set(8) // 1 MB/s, a 256 KiB burst
+	received := make(chan int, 4096)
 	go func() {
 		buf := make([]byte, 2048)
 		for {
-			if _, err := b.Read(buf); err != nil {
+			n, err := b.Read(buf)
+			if err != nil {
 				return
 			}
+			received <- n
 		}
 	}()
 	bulk := packet("93.184.215.14", 443, guestIP, 50000, protoTCP, 1500)
 	desk := packet(gatewayIP, 40000, guestIP, 5900, protoTCP, 1500)
-	for i := 0; i < 1000; i++ { // 1.5 MB at once: far past the burst
+	start := time.Now()
+	for i := 0; i < 500; i++ { // 750 kB: the burst and half a second more
 		c.Write(bulk)
 	}
-	if c.limitedDown.Load() == 0 {
-		t.Fatal("nothing was held to the limit")
+	took := time.Since(start)
+	if took < 350*time.Millisecond || took > 1500*time.Millisecond {
+		t.Errorf("750 kB at 1 MB/s took %v", took)
 	}
-	before := c.limitedDown.Load()
+	if got := len(received); got != 500 {
+		t.Errorf("%d of 500 frames arrived: pacing must not lose any", got)
+	}
+	// The remote desktop does not wait, even with the bucket in debt.
+	start = time.Now()
 	for i := 0; i < 100; i++ {
 		c.Write(desk)
 	}
-	if c.limitedDown.Load() != before {
-		t.Error("the remote desktop was held back by the limit")
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Errorf("the remote desktop waited %v behind the limit", took)
 	}
 }
 

@@ -107,7 +107,7 @@ type filteredConn struct {
 	held     atomic.Bool
 	up, down bucket
 	dropped  atomic.Uint64
-	// Frames dropped for going over the bandwidth limits, each way.
+	// Frames dropped (out) or made to wait (in) by the bandwidth limits.
 	limitedUp, limitedDown atomic.Uint64
 }
 
@@ -132,15 +132,16 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 	}
 }
 
-// Write carries a frame to the machine, unless it is over the limit; a
-// dropped frame is reported as written, as a full link would lose it.
+// Write carries a frame to the machine, when the limit has room for it.
 func (c *filteredConn) Write(b []byte) (int, error) {
 	if c.held.Load() {
 		return len(b), nil
 	}
-	if metered(b, false, c.gateway) && !c.down.allow(len(b), time.Now()) {
-		c.limitedDown.Add(1)
-		return len(b), nil
+	if metered(b, false, c.gateway) {
+		if d := c.down.delay(len(b), time.Now()); d > 0 {
+			c.limitedDown.Add(1)
+			time.Sleep(d)
+		}
 	}
 	return c.Conn.Write(b)
 }
