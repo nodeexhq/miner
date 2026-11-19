@@ -238,12 +238,11 @@ public enum Provisioning {
         let user = renterAccount
         let script = """
         set -e
+        new=
         if ! /usr/bin/id \(user) >/dev/null 2>&1; then
           sudo -n /usr/sbin/sysadminctl -addUser \(user) -fullName Renter -admin -password "$(/usr/bin/openssl rand -base64 24)" >/dev/null 2>&1
           \(lowBandwidthDefaults(user))
-          # The remote desktops kept in the base are installed for this
-          # renter, in the background: the account does not wait for them.
-          sudo -n /usr/bin/nohup /bin/sh -c 'for p in \(installersDirectory)/*.pkg; do [ -f "$p" ] && /usr/sbin/installer -pkg "$p" -target /; done' >/dev/null 2>&1 &
+          new=1
         fi
         for g in \(accessLists); do
           if /usr/sbin/dseditgroup -o read $g >/dev/null 2>&1; then sudo -n /usr/sbin/dseditgroup -o edit -a \(user) -t user $g; fi
@@ -253,6 +252,14 @@ public enum Provisioning {
         sudo -n /usr/sbin/chown -R \(user):staff /Users/\(user)/.ssh
         sudo -n /bin/chmod 700 /Users/\(user)/.ssh
         sudo -n /bin/chmod 600 /Users/\(user)/.ssh/authorized_keys
+        # The remote desktops kept in the base are installed for a new
+        # renter, once the keys are in: a few seconds each. (Started in the
+        # background they died with this session and were never installed.)
+        if [ -n "$new" ]; then
+          for p in \(installersDirectory)/*.pkg; do
+            if [ -f "$p" ]; then sudo -n /usr/sbin/installer -pkg "$p" -target / >/dev/null 2>&1 || true; fi
+          done
+        fi
         """
         try guest(script, at: endpoint, account: account, store: store, input: keys)
     }
