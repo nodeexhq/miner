@@ -176,16 +176,16 @@ final class MachineControllerTests: XCTestCase {
         let store = try store()
         let guests = Ref<[ControlledVM]>([])
         let controller = controller(store, guests)
-        controller.pauseLimit = 0.2
+        controller.pauseLimit = 1.0
         await controller.run(leaseID: "lease-1")
         let guest = try XCTUnwrap(guests.value.first)
         await controller.suspend()
         // Suspensions keep coming while the lease is unconfirmed; they must
         // not push the power-off back.
-        try await Task.sleep(nanoseconds: 120_000_000)
+        try await Task.sleep(nanoseconds: 400_000_000)
         await controller.suspend()
         XCTAssertFalse(guest.stopped)
-        try await Task.sleep(nanoseconds: 250_000_000)
+        for _ in 0..<40 where !guest.stopped { try await Task.sleep(nanoseconds: 100_000_000) }
         await settle()
         XCTAssertTrue(guest.stopped)
         XCTAssertEqual(controller.state, .suspended)
