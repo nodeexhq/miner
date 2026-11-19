@@ -72,6 +72,58 @@ public enum Provisioning {
         return account
     }
 
+    /// The account the automatic first-run setup makes in the base machine.
+    /// It is the host's way in (by key only); its password is random and
+    /// kept by nobody. Renters get their own account.
+    static let setupAccount = "nodeex"
+
+    /// What a new machine runs once, as root, at its first boot: it makes
+    /// the account, turns on Remote Login and Screen Sharing, marks Setup
+    /// Assistant as done, removes its own trigger and shuts down. It logs
+    /// to /var/log/nodeex-firstboot.log in the machine.
+    static let firstRunScript = """
+    #!/bin/sh
+    exec >>/private/var/log/nodeex-firstboot.log 2>&1
+    [ -e /private/var/db/.nodeex-firstboot-done ] && exit 0
+    mkdir /private/var/db/.nodeex-firstboot-lock 2>/dev/null || exit 0
+    set -x
+    date
+    U=\(setupAccount)
+    if ! /usr/bin/id $U >/dev/null 2>&1; then
+      /usr/sbin/sysadminctl -addUser $U -fullName NodeEx -admin -password "$(/usr/bin/openssl rand -base64 24)"
+    fi
+    /usr/sbin/createhomedir -c -u $U
+    /bin/launchctl enable system/com.openssh.sshd
+    /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist
+    /bin/launchctl enable system/com.apple.screensharing
+    /bin/launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist
+    /usr/bin/touch /private/var/db/.AppleSetupDone
+    /bin/rm -f /private/etc/crontab
+    /usr/bin/touch /private/var/db/.nodeex-firstboot-done
+    /bin/rmdir /private/var/db/.nodeex-firstboot-lock
+    /sbin/shutdown -h now
+
+    """
+
+    /// Arranges for a freshly installed, stopped base machine to do its own
+    /// first-run setup, so that nobody has to click through Setup Assistant:
+    /// the script above goes onto its disk with a system crontab that runs
+    /// it (cron starts on its own when /etc/crontab exists, and runs before
+    /// anyone has logged in). Returns false, changing nothing, if the
+    /// machine has already been set up or has an account.
+    @discardableResult
+    public static func prepareFirstRun(store: VMStore) throws -> Bool {
+        guard store.base.exists else { throw VMError.noBaseImage }
+        return try withGuestData(of: store.base) { data in
+            let fm = FileManager.default
+            let users = ((try? fm.contentsOfDirectory(atPath: data.appendingPathComponent("Users").path)) ?? []).filter { $0 != "Shared" && !$0.hasPrefix(".") }
+            guard users.isEmpty, !fm.fileExists(atPath: data.appendingPathComponent("private/var/db/.AppleSetupDone").path) else { return false }
+            try firstRunScript.write(to: data.appendingPathComponent("private/var/db/nodeex-firstboot.sh"), atomically: false, encoding: .utf8)
+            try "* * * * * root /bin/sh /private/var/db/nodeex-firstboot.sh\n".write(to: data.appendingPathComponent("private/etc/crontab"), atomically: false, encoding: .utf8)
+            return true
+        }
+    }
+
     static func accountFile(store: VMStore) -> URL { store.root.appendingPathComponent("account") }
 
     /// The guest account the base machine was prepared with, or nil if it

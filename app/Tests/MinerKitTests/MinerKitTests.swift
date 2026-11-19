@@ -136,3 +136,16 @@ final class DiskSizingTests: XCTestCase {
         }
     }
 }
+
+final class FirstRunScriptTests: XCTestCase {
+    func testScriptMakesTheAccountOnceAndRemovesItsTrigger() {
+        let s = Provisioning.firstRunScript
+        XCTAssertTrue(s.hasPrefix("#!/bin/sh\n"))
+        XCTAssertTrue(s.contains("U=nodeex\n"))
+        for step in ["sysadminctl -addUser $U", "openssl rand", "system/com.openssh.sshd", "system/com.apple.screensharing",
+                     ".AppleSetupDone", "rm -f /private/etc/crontab", "shutdown -h now"] {
+            XCTAssertTrue(s.contains(step), step)
+        }
+        XCTAssertFalse(s.contains("    #!/"), "the script must not be indented")
+    }
+}

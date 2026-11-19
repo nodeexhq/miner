@@ -117,7 +117,7 @@ final class MinerModel: ObservableObject {
             Task.detached {
                 let result = Result { try Provisioning.prepareBase(store: store) }
                 await MainActor.run {
-                    if case .success = result { self.advance() } else { self.phase = .guestSetup }
+                    if case .success = result { self.advance() } else { self.beginAutomaticSetup() }
                 }
             }
             return
@@ -161,12 +161,55 @@ final class MinerModel: ObservableObject {
                 }
                 // The image is 17 GB and has done its job.
                 try? FileManager.default.removeItem(at: store.restoreImage)
-                phase = .guestSetup
+                beginAutomaticSetup()
             } catch {
                 // A half-made machine is of no use; the next attempt starts clean.
                 try? FileManager.default.removeItem(at: store.base.directory)
                 phase = .failed("The machine could not be created: \(error)")
             }
+        }
+    }
+
+    /// How long the machine is given to set itself up before a person is
+    /// asked to do it.
+    static let automaticSetupLimit: TimeInterval = 10 * 60
+    private var triedAutomaticSetup = false
+
+    /// The machine's first-run setup without a person: the host writes a
+    /// script onto the stopped machine's disk, the machine runs it at its
+    /// first boot and shuts down. Tried once per launch; if the machine has
+    /// not shut down in time, or cannot be prepared, the owner is shown the
+    /// machine and asked to do the steps by hand, as before.
+    func beginAutomaticSetup() {
+        guard !triedAutomaticSetup, setupRunner == nil else { phase = .guestSetup; return }
+        triedAutomaticSetup = true
+        phase = .finishing
+        let store = store
+        Task {
+            let prepared = await Task.detached { (try? Provisioning.prepareFirstRun(store: store)) ?? false }.value
+            guard prepared, let runner = try? VMRunner(bundle: store.base, resources: .forThisHost()) else {
+                phase = .guestSetup
+                return
+            }
+            runner.onStop = { [weak self] _ in
+                guard let self, self.setupRunner === runner else { return }
+                self.setupRunner = nil
+                self.finishGuestSetup()
+            }
+            setupRunner = runner
+            do { try await runner.start() } catch {
+                setupRunner = nil
+                phase = .guestSetup
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(Self.automaticSetupLimit * 1_000_000_000))
+            guard setupRunner === runner else { return }
+            NSLog("NodeEx machine: automatic first-run setup did not finish; asking the owner")
+            runner.onStop = nil
+            await runner.stop()
+            setupRunner = nil
+            note = "The machine could not set itself up. Start it and do the steps below."
+            phase = .guestSetup
         }
     }
 
