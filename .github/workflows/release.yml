@@ -63,6 +63,9 @@ jobs:
             --notes "The command-line Miner and the NodeEx Miner app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
 
       - name: Update feed
+        # A test build (a tag with a suffix, such as v0.1.16-test.1) is published
+        # for trying on one machine; installed apps are not offered it.
+        if: ${{ !contains(github.ref_name, '-') }}
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
