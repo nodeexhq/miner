@@ -60,7 +60,7 @@ public final class MachineController: LeaseMachine {
             guard let mac = try? String(contentsOf: bundle.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
                 throw VMError.damagedBundle("MAC address")
             }
-            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort)
+            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort, limits: Self.bandwidthFile(store))
             network.onExit = onNetworkExit
             return try VMRunner(bundle: bundle, resources: resources, network: network)
         }
@@ -176,6 +176,26 @@ public final class MachineController: LeaseMachine {
     /// Installs the renter's SSH keys in the machine that is running, in
     /// place of any that were there. With no keys only the host can log in.
     /// The keys are remembered and applied to a machine still starting.
+    /// Where the machine's bandwidth limits are kept for its network
+    /// helper, which reads them every few seconds.
+    /// A file rather than the controller's state, so that limits that come
+    /// before any machine is made still apply to it.
+    public static func bandwidthFile(_ store: VMStore) -> URL { store.root.appendingPathComponent("bandwidth.json") }
+
+    /// Limits the machine's internet traffic, in megabits per second each
+    /// way; 0 is no limit. The platform sets them from the measured line.
+    public static func setBandwidth(upMbps: Double, downMbps: Double, store: VMStore) {
+        let file = bandwidthFile(store)
+        guard upMbps > 0 || downMbps > 0 else {
+            try? FileManager.default.removeItem(at: file)
+            return
+        }
+        let body = ["up_mbps": max(0, upMbps), "down_mbps": max(0, downMbps)]
+        if let data = try? JSONSerialization.data(withJSONObject: body) {
+            try? data.write(to: file, options: .atomic)
+        }
+    }
+
     public func authorize(renterKeys: [String]) {
         wantedKeys = renterKeys
         applyKeys()

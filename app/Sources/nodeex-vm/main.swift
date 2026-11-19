@@ -114,7 +114,7 @@ func main() async {
             var network: GuestNetwork?
             if !CommandLine.arguments.contains("--nat"), let helper = GuestNetwork.helper() {
                 let mac = try String(contentsOf: store.current.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-                network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: MachineController.sshPort, vncPort: MachineController.vncPort)
+                network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: MachineController.sshPort, vncPort: MachineController.vncPort, limits: MachineController.bandwidthFile(store))
             }
             let runner = try VMRunner(bundle: store.current, resources: resources, network: network)
             runner.onStop = { error in

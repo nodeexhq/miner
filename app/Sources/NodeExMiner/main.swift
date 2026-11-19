@@ -336,6 +336,8 @@ final class MinerModel: ObservableObject {
         case "sessions":
             sessions = event.sessions ?? 0
             sessionsChanged = Date()
+        case "bandwidth":
+            MachineController.setBandwidth(upMbps: event.upMbps ?? 0, downMbps: event.downMbps ?? 0, store: store)
         case "lease_state":
             guard coreRunning, leaseSupervisor?.receive(event) == true else { return }
             let previous = lease

@@ -24,6 +24,7 @@ import (
 // supervisor must not infer authorization from gate status or old disk data.
 //
 //	{"event":"sessions","sessions":<n>}   (when the number of renter connections changes)
+//	{"event":"bandwidth","up_mbps":<n>,"down_mbps":<n>}   (when the machine's limits change; 0 is none)
 type event struct {
 	Event       string     `json:"event"`
 	State       string     `json:"state,omitempty"`
@@ -38,6 +39,10 @@ type event struct {
 	// Sessions is the number of renter connections open, on sessions
 	// only: the app installs updates while nobody is connected.
 	Sessions *int `json:"sessions,omitempty"`
+	// UpMbps and DownMbps limit the rented machine's internet traffic, on
+	// bandwidth events; zero means no limit.
+	UpMbps   *float64 `json:"up_mbps,omitempty"`
+	DownMbps *float64 `json:"down_mbps,omitempty"`
 }
 
 func leaseEvent(id string, endsAt time.Time, keys []string, confirmedAt time.Time) event {

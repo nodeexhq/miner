@@ -14,12 +14,16 @@ public struct CoreEvent: Decodable, Sendable {
     public let sshKeys: [String]?
     /// Renter connections open, on "sessions" events.
     public let sessions: Int?
+    /// The machine's internet bandwidth limits, on "bandwidth" events; 0 is none.
+    public let upMbps: Double?
+    public let downMbps: Double?
 
     enum CodingKeys: String, CodingKey {
         case event, state, node, addr, lease, sessions
         case endsAt = "ends_at"
         case confirmedAt = "confirmed_at"
         case sshKeys = "ssh_keys"
+        case upMbps = "up_mbps", downMbps = "down_mbps"
     }
 }
 

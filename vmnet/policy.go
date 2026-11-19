@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync/atomic"
+	"time"
 )
 
 // What a rented machine may not reach.
@@ -99,7 +100,11 @@ type filteredConn struct {
 	net.Conn
 	guestNet netip.Prefix
 	home     *homeAddrs
+	gateway  netip.Addr
+	up, down bucket
 	dropped  atomic.Uint64
+	// Frames dropped for going over the bandwidth limits, each way.
+	limitedUp, limitedDown atomic.Uint64
 }
 
 func (c *filteredConn) Read(b []byte) (int, error) {
@@ -108,11 +113,26 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		if allowed(b[:n], c.guestNet, c.home.list()) {
-			return n, nil
+		if !allowed(b[:n], c.guestNet, c.home.list()) {
+			c.dropped.Add(1)
+			continue
 		}
-		c.dropped.Add(1)
+		if metered(b[:n], true, c.gateway) && !c.up.allow(n, time.Now()) {
+			c.limitedUp.Add(1)
+			continue
+		}
+		return n, nil
 	}
+}
+
+// Write carries a frame to the machine, unless it is over the limit; a
+// dropped frame is reported as written, as a full link would lose it.
+func (c *filteredConn) Write(b []byte) (int, error) {
+	if metered(b, false, c.gateway) && !c.down.allow(len(b), time.Now()) {
+		c.limitedDown.Add(1)
+		return len(b), nil
+	}
+	return c.Conn.Write(b)
 }
 
 func mustCIDR(s string) netip.Prefix { return netip.MustParsePrefix(s) }

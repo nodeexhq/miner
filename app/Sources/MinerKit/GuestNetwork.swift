@@ -16,7 +16,7 @@ public final class GuestNetwork: @unchecked Sendable {
 
     private let process = Process()
 
-    public init(helper: URL, macAddress: String, sshPort: UInt16, vncPort: UInt16) throws {
+    public init(helper: URL, macAddress: String, sshPort: UInt16, vncPort: UInt16, limits: URL) throws {
         self.sshPort = sshPort
         self.vncPort = vncPort
         var fds: [Int32] = [0, 0]
@@ -31,7 +31,7 @@ public final class GuestNetwork: @unchecked Sendable {
         machineEnd = FileHandle(fileDescriptor: fds[0], closeOnDealloc: true)
         let helperEnd = FileHandle(fileDescriptor: fds[1], closeOnDealloc: true)
         process.executableURL = helper
-        process.arguments = ["-mac", macAddress, "-ssh-listen", "127.0.0.1:\(sshPort)", "-vnc-listen", "127.0.0.1:\(vncPort)"]
+        process.arguments = ["-mac", macAddress, "-ssh-listen", "127.0.0.1:\(sshPort)", "-vnc-listen", "127.0.0.1:\(vncPort)", "-limits", limits.path]
         // The helper asks the platform for this Mac's public address, to
         // refuse it to the machine; the same platform the app talks to.
         if let api = ProcessInfo.processInfo.environment["NODEEX_API"], !api.isEmpty {

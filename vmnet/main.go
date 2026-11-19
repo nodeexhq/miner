@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,6 +36,7 @@ func main() {
 	mac := flag.String("mac", "", "the machine's MAC address")
 	sshListen := flag.String("ssh-listen", "127.0.0.1:22022", "host address forwarded to the machine's SSH")
 	vncListen := flag.String("vnc-listen", "127.0.0.1:25900", "host address forwarded to the machine's remote desktop")
+	limitsFile := flag.String("limits", "", "file with the machine's bandwidth limits, written by the app")
 	api := flag.String("api", "https://app.nodeex.com", "platform API, asked for the owner's public address")
 	flag.Parse()
 	hw, err := net.ParseMAC(*mac)
@@ -93,7 +95,10 @@ func main() {
 
 	home := &homeAddrs{}
 	go watchHome(ctx, *api, home)
-	filtered := &filteredConn{Conn: conn, guestNet: mustCIDR(subnet), home: home}
+	filtered := &filteredConn{Conn: conn, guestNet: mustCIDR(subnet), home: home, gateway: netip.MustParseAddr(gatewayIP)}
+	if *limitsFile != "" {
+		go watchLimits(ctx, *limitsFile, &filtered.up, &filtered.down)
+	}
 	done := make(chan error, 1)
 	go func() { done <- vn.AcceptVfkit(ctx, filtered) }()
 	select {
@@ -107,6 +112,9 @@ func main() {
 	conn.Close()
 	if n := filtered.dropped.Load(); n > 0 {
 		log.Printf("refused %d frames from the machine", n)
+	}
+	if u, d := filtered.limitedUp.Load(), filtered.limitedDown.Load(); u+d > 0 {
+		log.Printf("dropped %d frames out and %d in over the bandwidth limits", u, d)
 	}
 }
 

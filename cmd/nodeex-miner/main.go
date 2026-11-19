@@ -404,6 +404,9 @@ func cmdRun(args []string) error {
 	}
 
 	lastStatus := ""
+	// The machine's limits, sent once and then whenever they change.
+	var lastBandwidth machineBandwidth
+	sentBandwidth := false
 	lastSessions := -1
 	lastKeys := ""
 	started := time.Now()
@@ -485,6 +488,15 @@ func cmdRun(args []string) error {
 		// VM's own network (including third-party remote desktops) is governed
 		// by this snapshot, independently of whether the gate is available.
 		emit(leaseEvent(lease, endsAt, keys, time.Now()))
+		var bw machineBandwidth
+		if res.Bandwidth != nil {
+			bw = *res.Bandwidth
+		}
+		if !sentBandwidth || bw != lastBandwidth {
+			up, down := bw.UpMbps, bw.DownMbps
+			emit(event{Event: "bandwidth", UpMbps: &up, DownMbps: &down})
+			lastBandwidth, sentBandwidth = bw, true
+		}
 		if previous := state.set(lease, endsAt); previous != lease {
 			if previous != "" {
 				log.Printf("lease %s ended; its connections are closed", previous)
