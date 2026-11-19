@@ -43,6 +43,13 @@ public enum Provisioning {
             for leftover in ["private/etc/crontab", "private/var/db/nodeex-firstboot.sh"] {
                 try? fm.removeItem(at: data.appendingPathComponent(leftover))
             }
+            // A machine that set itself up must have passed its own check.
+            // (One set up by hand has neither marker.)
+            let db = data.appendingPathComponent("private/var/db")
+            if fm.fileExists(atPath: db.appendingPathComponent(".nodeex-firstboot-done").path),
+               !fm.fileExists(atPath: db.appendingPathComponent(".nodeex-firstboot-ok").path) {
+                throw Failure(description: "the machine's own setup did not pass its check (see /var/log/nodeex-firstboot.log in the machine)")
+            }
             let users = try fm.contentsOfDirectory(atPath: data.appendingPathComponent("Users").path).filter { $0 != "Shared" && !$0.hasPrefix(".") }
             guard users.count == 1, let account = users.first else {
                 throw Failure(description: "expected one account in the base machine, found \(users.sorted())")
@@ -121,6 +128,16 @@ public enum Provisioning {
       /usr/sbin/dseditgroup -o read $g >/dev/null 2>&1 || /usr/sbin/dseditgroup -o create -q $g
       /usr/sbin/dseditgroup -o edit -a $U -t user $g
     done
+    # The renter should not meet an account they do not know at the login
+    # window: this one is the host's, and is kept out of sight.
+    /usr/bin/dscl . -create /Users/$U IsHidden 1
+    # A machine that is rented does not sleep or blank its display (a remote
+    # desktop would find it dark), and does not fetch macOS updates on the
+    # owner's line or restart itself for them.
+    /usr/bin/pmset -a sleep 0 displaysleep 0 disksleep 0
+    /usr/bin/defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
+    /usr/bin/defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticallyInstallMacOSUpdates -bool false
+    /usr/bin/defaults write /Library/Preferences/com.apple.commerce AutoUpdate -bool false
     # Remote desktops that do well on a slow line, for renters who want one:
     # the vendors' own installers, fetched from them and kept only if they
     # carry the vendor's Apple-notarized signature. Each renter's machine
@@ -150,6 +167,16 @@ public enum Provisioning {
     # host removes it once the machine is off. Until then the marker below
     # keeps this from running twice.
     /usr/bin/touch /private/var/db/.nodeex-firstboot-done
+    # The machine checks its own work, and says so only if the host will be
+    # able to log in: the account exists, is on both access lists, and
+    # Remote Login is loaded. The host does not call the base ready without it.
+    ok=1
+    /usr/bin/id $U >/dev/null 2>&1 || ok=
+    for g in \(accessLists); do
+      /usr/sbin/dseditgroup -o checkmember -m $U $g >/dev/null 2>&1 || ok=
+    done
+    /bin/launchctl print system/com.openssh.sshd >/dev/null 2>&1 || ok=
+    if [ -n "$ok" ]; then /usr/bin/touch /private/var/db/.nodeex-firstboot-ok; fi
     /bin/rmdir /private/var/db/.nodeex-firstboot-lock
     /sbin/shutdown -h now
 
@@ -279,12 +306,14 @@ public enum Provisioning {
             "com.apple.dock expose-animation-duration -float 0.1",
             "com.apple.dock mineffect -string scale",
             "com.apple.finder DisableAllAnimations -bool true",
-            "-currentHost com.apple.screensaver idleTime -int 0",
             "com.apple.universalaccess reduceTransparency -bool true",
             "com.apple.universalaccess reduceMotion -bool true",
         ]
         var lines = ["sudo -n /usr/sbin/createhomedir -c -u \(user) >/dev/null 2>&1 || true"]
         lines += writes.map { "sudo -n -H -u \(user) /usr/bin/defaults write \($0) >/dev/null 2>&1 || true" }
+        // No screen saver: -currentHost goes before the verb (after it, as
+        // first written, the setting silently went nowhere).
+        lines.append("sudo -n -H -u \(user) /usr/bin/defaults -currentHost write com.apple.screensaver idleTime -int 0 >/dev/null 2>&1 || true")
         return lines.joined(separator: "\n  ")
     }
 

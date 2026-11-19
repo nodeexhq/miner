@@ -143,7 +143,7 @@ final class FirstRunScriptTests: XCTestCase {
         XCTAssertTrue(s.hasPrefix("#!/bin/sh\n"))
         XCTAssertTrue(s.contains("U=nodeex\n"))
         for step in ["sysadminctl -addUser $U", "openssl rand", "system/com.openssh.sshd", "system/com.apple.screensharing",
-                     ".AppleSetupDone", "com.apple.access_ssh", "-a $U -t user", "shutdown -h now",
+                     ".AppleSetupDone", "com.apple.access_ssh", "-a $U -t user", "IsHidden 1", "pmset -a sleep 0", ".nodeex-firstboot-ok", "checkmember -m $U", "AutomaticDownload -bool false", "shutdown -h now",
                      "D=/Users/Shared/NodeEx\n", "2HCKV38EEC", "PU9BNSBJW7", "spctl -a -t install"] {
             XCTAssertTrue(s.contains(step), step)
         }
