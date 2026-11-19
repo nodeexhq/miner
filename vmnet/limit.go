@@ -19,8 +19,13 @@ import (
 //
 // The two directions are held differently, because the two senders differ.
 //
-// What the machine sends is policed: a frame over the limit is dropped and
-// the machine's own TCP slows down, so nothing waits behind a bulk transfer.
+// What the machine sends is paced too, but only a little: a frame waits for
+// room up to upQueue, and is dropped beyond that. Dropping at once, with no
+// wait at all, cost a single copy over SSH more than half of the limit
+// (measured: 16 Mbit/s under 41.6, with 3% of the machine's packets lost);
+// a short wait lets its TCP settle at the limit instead. The wait is kept
+// short because frames are read from the machine one at a time, so the
+// remote desktop waits behind a bulk transfer for at most that long.
 //
 // What the machine receives is paced: the frame is delivered when the limit
 // has room for it. The sender here is the virtual network's own TCP, right
@@ -31,6 +36,9 @@ import (
 // waits at most for the one ahead of it.
 
 const remoteDesktopPort = 5900
+
+// upQueue is the longest a frame the machine sends waits for room.
+const upQueue = 40 * time.Millisecond
 
 // bucket is a token bucket counting bytes; a zero rate means no limit.
 type bucket struct {
@@ -85,6 +93,32 @@ func (b *bucket) delay(n int, now time.Time) time.Duration {
 		return 0
 	}
 	return time.Duration(-b.tokens / b.rate * float64(time.Second))
+}
+
+// pace takes n bytes from the bucket if they can leave within limit, and
+// returns how long to wait before sending them; ok is false, and nothing is
+// taken, when the wait would be longer.
+func (b *bucket) pace(n int, now time.Time, limit time.Duration) (wait time.Duration, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.rate <= 0 {
+		return 0, true
+	}
+	if !b.last.IsZero() {
+		b.tokens = min(b.burst, b.tokens+now.Sub(b.last).Seconds()*b.rate)
+	}
+	b.last = now
+	after := b.tokens - float64(n)
+	if after >= 0 {
+		b.tokens = after
+		return 0, true
+	}
+	wait = time.Duration(-after / b.rate * float64(time.Second))
+	if wait > limit {
+		return 0, false
+	}
+	b.tokens = after
+	return wait, true
 }
 
 // metered reports whether a frame counts against the limits. out is true

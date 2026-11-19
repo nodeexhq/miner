@@ -124,9 +124,13 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 			c.dropped.Add(1)
 			continue
 		}
-		if metered(b[:n], true, c.gateway) && !c.up.allow(n, time.Now()) {
-			c.limitedUp.Add(1)
-			continue
+		if metered(b[:n], true, c.gateway) {
+			wait, ok := c.up.pace(n, time.Now(), upQueue)
+			if !ok {
+				c.limitedUp.Add(1)
+				continue
+			}
+			time.Sleep(wait)
 		}
 		return n, nil
 	}

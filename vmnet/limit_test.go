@@ -206,3 +206,41 @@ func TestHeldConnDropsEverything(t *testing.T) {
 		t.Fatal("the network did not come back")
 	}
 }
+
+func TestPaceWaitsBrieflyThenDrops(t *testing.T) {
+	var b bucket
+	b.set(8) // 1 MB/s
+	now := time.Now()
+	b.pace(1<<30, now, 0) // nothing taken: far over
+	now = now.Add(time.Second) // the bucket fills
+	// Empty the burst.
+	if w, ok := b.pace(int(b.burst), now, upQueue); !ok || w != 0 {
+		t.Fatalf("burst: wait %v ok %v", w, ok)
+	}
+	// The next frames wait, each a little longer, up to the queue's length.
+	var waited, dropped int
+	var longest time.Duration
+	for range 100 {
+		w, ok := b.pace(1500, now, upQueue)
+		if !ok {
+			dropped++
+			continue
+		}
+		waited++
+		longest = max(longest, w)
+	}
+	if waited == 0 || dropped == 0 {
+		t.Fatalf("waited %d dropped %d: want some of each", waited, dropped)
+	}
+	if longest > upQueue {
+		t.Errorf("a frame waited %v, longer than %v", longest, upQueue)
+	}
+	// 40 ms at 1 MB/s is 40 kB: about 26 frames of 1500 bytes.
+	if waited < 20 || waited > 30 {
+		t.Errorf("%d frames queued, want about 26", waited)
+	}
+	// A dropped frame takes nothing: once time passes there is room again.
+	if _, ok := b.pace(1500, now.Add(time.Second), upQueue); !ok {
+		t.Error("no room a second later")
+	}
+}
