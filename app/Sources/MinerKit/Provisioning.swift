@@ -38,6 +38,11 @@ public enum Provisioning {
         let publicKey = try String(contentsOf: try hostKey(store: store).appendingPathExtension("pub"), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         let account: String = try withGuestData(of: store.base) { data in
             let fm = FileManager.default
+            // What the automatic first-run setup left: its trigger and
+            // script have done their job and must not reach a renter.
+            for leftover in ["private/etc/crontab", "private/var/db/nodeex-firstboot.sh"] {
+                try? fm.removeItem(at: data.appendingPathComponent(leftover))
+            }
             let users = try fm.contentsOfDirectory(atPath: data.appendingPathComponent("Users").path).filter { $0 != "Shared" && !$0.hasPrefix(".") }
             guard users.count == 1, let account = users.first else {
                 throw Failure(description: "expected one account in the base machine, found \(users.sorted())")
@@ -81,6 +86,10 @@ public enum Provisioning {
     /// offered to renters (Jump Desktop Connect, UU Remote).
     static let installersDirectory = "/Users/Shared/NodeEx"
 
+    /// The access lists Remote Login and Screen Sharing ask. An account
+    /// that is not on them is refused even with the right key or password.
+    static let accessLists = "com.apple.access_ssh com.apple.access_screensharing"
+
     /// What a new machine runs once, as root, at its first boot: it makes
     /// the account, turns on Remote Login and Screen Sharing, marks Setup
     /// Assistant as done, removes its own trigger and shuts down. It logs
@@ -90,17 +99,28 @@ public enum Provisioning {
     exec >>/private/var/log/nodeex-firstboot.log 2>&1
     [ -e /private/var/db/.nodeex-firstboot-done ] && exit 0
     mkdir /private/var/db/.nodeex-firstboot-lock 2>/dev/null || exit 0
-    set -x
     date
     U=\(setupAccount)
+    # Before the commands are echoed to the log: the password must not be
+    # written anywhere.
     if ! /usr/bin/id $U >/dev/null 2>&1; then
-      /usr/sbin/sysadminctl -addUser $U -fullName NodeEx -admin -password "$(/usr/bin/openssl rand -base64 24)"
+      /usr/sbin/sysadminctl -addUser $U -fullName NodeEx -admin -password "$(/usr/bin/openssl rand -base64 24)" 2>&1 | /usr/bin/grep -v -i password
     fi
+    set -x
     /usr/sbin/createhomedir -c -u $U
     /bin/launchctl enable system/com.openssh.sshd
     /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist
     /bin/launchctl enable system/com.apple.screensharing
     /bin/launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist
+    # Turned on this way, each service still asks its access list, which
+    # System Settings would have filled in: without it sshd accepts the
+    # key and then refuses the account. The account is added by name (a
+    # nested administrators group is not honoured); each renter's account
+    # is added when it is made.
+    for g in \(accessLists); do
+      /usr/sbin/dseditgroup -o read $g >/dev/null 2>&1 || /usr/sbin/dseditgroup -o create -q $g
+      /usr/sbin/dseditgroup -o edit -a $U -t user $g
+    done
     # Remote desktops that do well on a slow line, for renters who want one:
     # the vendors' own installers, fetched from them and kept only if they
     # carry the vendor's Apple-notarized signature. Each renter's machine
@@ -126,7 +146,9 @@ public enum Provisioning {
     fi
     ls -l $D
     /usr/bin/touch /private/var/db/.AppleSetupDone
-    /bin/rm -f /private/etc/crontab
+    # The crontab cannot be removed from in here (the host wrote it); the
+    # host removes it once the machine is off. Until then the marker below
+    # keeps this from running twice.
     /usr/bin/touch /private/var/db/.nodeex-firstboot-done
     /bin/rmdir /private/var/db/.nodeex-firstboot-lock
     /sbin/shutdown -h now
@@ -223,6 +245,9 @@ public enum Provisioning {
           # renter, in the background: the account does not wait for them.
           sudo -n /usr/bin/nohup /bin/sh -c 'for p in \(installersDirectory)/*.pkg; do [ -f "$p" ] && /usr/sbin/installer -pkg "$p" -target /; done' >/dev/null 2>&1 &
         fi
+        for g in \(accessLists); do
+          if /usr/sbin/dseditgroup -o read $g >/dev/null 2>&1; then sudo -n /usr/sbin/dseditgroup -o edit -a \(user) -t user $g; fi
+        done
         sudo -n /bin/mkdir -p /Users/\(user)/.ssh
         sudo -n /usr/bin/tee /Users/\(user)/.ssh/authorized_keys >/dev/null
         sudo -n /usr/sbin/chown -R \(user):staff /Users/\(user)/.ssh
