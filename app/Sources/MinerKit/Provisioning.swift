@@ -286,6 +286,10 @@ public enum Provisioning {
           for p in \(installersDirectory)/*.pkg; do
             if [ -f "$p" ]; then sudo -n /usr/sbin/installer -pkg "$p" -target / >/dev/null 2>&1 || true; fi
           done
+          # The login window came up before this account existed and, with
+          # the host's account hidden, asks for a name. Started again it
+          # shows the renter's account. Nobody is logged in yet.
+          if ! /usr/bin/pgrep -x Finder >/dev/null 2>&1; then sudo -n /usr/bin/killall loginwindow >/dev/null 2>&1 || true; fi
         fi
         """
         try guest(script, at: endpoint, account: account, store: store, input: keys)
