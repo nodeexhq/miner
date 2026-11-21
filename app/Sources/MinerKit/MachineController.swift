@@ -61,9 +61,13 @@ public final class MachineController: LeaseMachine {
     /// Set when the current machine's network helper cut its network for
     /// abuse (scanning, flooding); nil again for the next machine. The cut
     /// stays, whatever the lease does, until the machine is replaced.
-    /// Ending the lease and telling the platform are not done here yet.
     public private(set) var networkAbuse: GuestNetwork.Abuse?
-    public var onNetworkAbuse: ((GuestNetwork.Abuse) -> Void)?
+    /// Called with the abuse, recorded (AbuseRecord) for the machine's
+    /// lease, for the platform to be told. That lease is never given a
+    /// machine again: a new machine would come with a new network helper,
+    /// without the cut. The platform ends the lease, and the machine is
+    /// discarded when it says so.
+    public var onNetworkAbuse: ((AbuseRecord) -> Void)?
 
     private let store: VMStore
     private let resources: VMResources
@@ -134,6 +138,10 @@ public final class MachineController: LeaseMachine {
     /// lease:null means no current authorization, not necessarily final expiry.
     public func run(leaseID: String) async {
         guard !leaseID.isEmpty else { await suspend(); return }
+        if barred(leaseID) {
+            await refuseBarred(leaseID)
+            return
+        }
         permitted = true
         authorizedLeaseID = leaseID
         if pausedLease == leaseID, store.currentLease == leaseID, let paused = runner {
@@ -142,6 +150,15 @@ public final class MachineController: LeaseMachine {
         }
         let reset = !store.current.exists || store.currentLease != leaseID
         await boot(reset: reset, for: leaseID)
+    }
+
+    /// Whether lease's machine was cut off for abuse.
+    private func barred(_ lease: String) -> Bool { AbuseRecord.load(store)?.lease == lease }
+
+    private func refuseBarred(_ lease: String) async {
+        NSLog("NodeEx machine: lease %@ was cut off for abuse; no machine for it", lease)
+        await powerOff()
+        state = .failed("cut off the network for abuse; the lease is being ended")
     }
 
     /// Brings this lease's paused machine back as it was. False if it could
@@ -188,6 +205,12 @@ public final class MachineController: LeaseMachine {
         state = .starting
         await stopCurrent()
         guard generation == mine, permitted else { return }
+        // A restart (the renter shut it down, the helper stopped) of a
+        // machine cut off for abuse would come back with its network.
+        if barred(lease) {
+            await refuseBarred(lease)
+            return
+        }
         guard store.base.exists else {
             state = .noBase
             return
@@ -214,9 +237,15 @@ public final class MachineController: LeaseMachine {
             next.observeNetworkAbuse { [weak self] abuse in
                 Task { @MainActor in
                     guard let self, self.runnerBoot == boot else { return }
-                    NSLog("NodeEx machine: network cut for abuse%@: %@ (%@)", self.store.currentLease.map { " in lease \($0)" } ?? "", abuse.reason, abuse.detail)
+                    let lease = self.store.currentLease
+                    NSLog("NodeEx machine: network cut for abuse%@: %@ (%@)", lease.map { " in lease \($0)" } ?? "", abuse.reason, abuse.detail)
                     self.networkAbuse = abuse
-                    self.onNetworkAbuse?(abuse)
+                    guard let lease, AbuseRecord.load(self.store)?.lease != lease else { return }
+                    let record = AbuseRecord(lease: lease, reason: abuse.reason, detail: abuse.detail, time: abuse.time)
+                    do { try record.save(self.store) } catch {
+                        NSLog("NodeEx machine: could not record the abuse: %@", "\(error)")
+                    }
+                    self.onNetworkAbuse?(record)
                 }
             }
             attach(next, generation: mine)
@@ -384,6 +413,8 @@ public final class MachineController: LeaseMachine {
         state = .suspended
         await stopCurrent()
         guard generation == mine, !permitted, store.current.exists else { return }
+        // The lease has ended: its abuse record has done its work.
+        AbuseRecord.remove(store)
         do {
             try store.discardCurrent()
             NSLog("NodeEx machine: the last renter's machine was destroyed")

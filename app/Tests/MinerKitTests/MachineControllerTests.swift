@@ -243,6 +243,76 @@ final class MachineControllerTests: XCTestCase {
         XCTAssertEqual(controller.state, .suspended)
         XCTAssertTrue(store.current.exists)
     }
+
+    // A machine cut off for abuse keeps its network cut: the cut lives in
+    // its network helper, so the lease never gets another machine (which
+    // would come with a new helper), not on a restart of the machine, nor
+    // of the app. The record is reported once, and goes with the machine.
+    func testAMachineCutOffForAbuseIsNeverStartedAgainForItsLease() async throws {
+        let store = try store()
+        var guests: [ControlledVM] = []
+        let factory: MachineController.RunnerFactory = { _, _, _ in
+            let guest = ControlledVM()
+            guests.append(guest)
+            return guest
+        }
+        let controller = MachineController(store: store, resources: .forThisHost(), makeRunner: factory)
+        var reports: [AbuseRecord] = []
+        controller.onNetworkAbuse = { reports.append($0) }
+        await controller.run(leaseID: "lease-1")
+        let guest = try XCTUnwrap(guests.first)
+        let abuse = GuestNetwork.Abuse(reason: "port_scan", detail: "more than 64 ports of 10.0.0.9 in 60 s", time: "2026-11-21T10:00:00Z")
+        guest.abuseHandler?(abuse)
+        guest.abuseHandler?(abuse) // said twice, reported once
+        await settle()
+        XCTAssertEqual(reports, [AbuseRecord(lease: "lease-1", reason: "port_scan", detail: abuse.detail, time: abuse.time)])
+        XCTAssertEqual(AbuseRecord.load(store)?.lease, "lease-1")
+        XCTAssertEqual(controller.networkAbuse, abuse)
+
+        // The renter shuts the machine down: it is not started again.
+        guest.onStop?(nil)
+        await settle()
+        XCTAssertEqual(guests.count, 1)
+        XCTAssertTrue(guest.stopped)
+        XCTAssertFalse(guest.networkConnected)
+        XCTAssertEqual(controller.state, .failed("cut off the network for abuse; the lease is being ended"))
+        // Nor when the lease is confirmed again.
+        await controller.suspend()
+        await controller.run(leaseID: "lease-1")
+        XCTAssertEqual(guests.count, 1)
+
+        // Nor by the app after a relaunch.
+        let relaunched = MachineController(store: store, resources: .forThisHost(), makeRunner: factory)
+        await relaunched.run(leaseID: "lease-1")
+        XCTAssertEqual(guests.count, 1)
+        XCTAssertEqual(store.currentLease, "lease-1", "the machine is kept until the platform ends the lease")
+
+        // The platform ends the lease: the machine goes, and the record with it.
+        await relaunched.discard()
+        XCTAssertFalse(store.current.exists)
+        XCTAssertNil(AbuseRecord.load(store))
+        await relaunched.run(leaseID: "lease-2")
+        XCTAssertEqual(guests.count, 2)
+        XCTAssertEqual(relaunched.state, .ready(sshPort: MachineController.sshPort))
+        await relaunched.suspend()
+    }
+
+    // A paused machine cut off for abuse is not resumed (which would
+    // release its network hold) for the lease either.
+    func testAPausedMachineCutOffForAbuseIsNotResumed() async throws {
+        let store = try store()
+        let guest = ControlledVM()
+        let controller = MachineController(store: store, resources: .forThisHost()) { _, _, _ in guest }
+        await controller.run(leaseID: "lease-1")
+        guest.abuseHandler?(GuestNetwork.Abuse(reason: "fan_out", detail: "", time: ""))
+        await settle()
+        await controller.suspend()
+        XCTAssertEqual(controller.state, .paused)
+        await controller.run(leaseID: "lease-1")
+        XCTAssertEqual(guest.resumes, 0)
+        XCTAssertFalse(guest.networkConnected)
+        XCTAssertTrue(guest.stopped)
+    }
 }
 
 @MainActor
@@ -265,6 +335,8 @@ private final class ControlledVM: VMRuntime {
 
     var paused = false
     var canPause = true
+    var abuseHandler: (@Sendable (GuestNetwork.Abuse) -> Void)?
+    func observeNetworkAbuse(_ handler: @escaping @Sendable (GuestNetwork.Abuse) -> Void) { abuseHandler = handler }
     var pauses = 0, resumes = 0
     func disconnect() { networkConnected = false }
     func holdNetwork() { networkConnected = false }

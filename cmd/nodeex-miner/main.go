@@ -6,6 +6,8 @@
 //	nodeex-miner run [-dir DIR]
 //	nodeex-miner status [-dir DIR]
 //	nodeex-miner service <install|uninstall|status> [-dir DIR] [-- run flags]
+//	nodeex-miner abuse -lease ID -reason REASON [-detail TEXT] [-dir DIR]
+//	nodeex-miner stop-lease -lease ID [-reason TEXT] [-dir DIR]
 package main
 
 import (
@@ -112,6 +114,10 @@ func main() {
 		err = cmdStatus(os.Args[2:])
 	case "service":
 		err = cmdService(os.Args[2:])
+	case "abuse":
+		err = cmdAbuse(os.Args[2:])
+	case "stop-lease":
+		err = cmdStopLease(os.Args[2:])
 	case "version":
 		fmt.Println(version)
 	default:
@@ -119,12 +125,12 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nodeex-miner:", err)
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nodeex-miner <check|enroll|run|status|service|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: nodeex-miner <check|enroll|run|status|service|abuse|stop-lease|version> [flags]")
 	os.Exit(2)
 }
 
@@ -132,7 +138,10 @@ func usage() {
 // one. Getting any answer at all means the far end was reached over TLS.
 type statusError struct {
 	Status int
-	msg    string
+	// Code is the platform's error code ("lease_not_current"), when it
+	// gave one.
+	Code string
+	msg  string
 }
 
 func (e *statusError) Error() string { return e.msg }
@@ -178,9 +187,9 @@ func call(ctx context.Context, api string, priv ed25519.PrivateKey, method, path
 			Error struct{ Code, Message string } `json:"error"`
 		}
 		if json.Unmarshal(raw, &e) == nil && e.Error.Code != "" {
-			return &statusError{res.StatusCode, fmt.Sprintf("%s %s: %s (%s)", method, path, e.Error.Message, e.Error.Code)}
+			return &statusError{res.StatusCode, e.Error.Code, fmt.Sprintf("%s %s: %s (%s)", method, path, e.Error.Message, e.Error.Code)}
 		}
-		return &statusError{res.StatusCode, fmt.Sprintf("%s %s: HTTP %d", method, path, res.StatusCode)}
+		return &statusError{res.StatusCode, "", fmt.Sprintf("%s %s: HTTP %d", method, path, res.StatusCode)}
 	}
 	if out != nil {
 		return json.Unmarshal(raw, out)

@@ -39,6 +39,26 @@ final class MinerModel: ObservableObject {
     @Published var lastLog = ""
     /// The machine shown in the setup window during its first-run setup.
     @Published var setupMachine: VZVirtualMachine?
+    /// The machine was cut off the network for abuse, and what has come of
+    /// telling the platform.
+    @Published var abuse: AbuseRecord?
+    @Published var abuseStatus = ""
+    /// The owner's emergency stop: the lease it is for (fixed when the
+    /// window opens), and how it went.
+    enum StopState: Equatable {
+        case confirming
+        case stopping
+        case done(StopLeaseReply)
+        case failed(String)
+    }
+    @Published var stopLease: String?
+    @Published var stopState: StopState = .confirming
+    /// An emergency stop switched mining off; the owner turns it on again in
+    /// the dashboard. Until then the node gets no new leases (and if one
+    /// comes, mining is evidently on again).
+    @Published var miningOff = false
+    @Published var pausedUntil: Date?
+    private var reporter: AbuseReporter?
 
     private let store = VMStore.standard
     private var core: CoreSupervisor?
@@ -273,6 +293,27 @@ final class MinerModel: ObservableObject {
         do {
             let controller = try MachineController(store: store)
             controller.onChange = { [weak self] state in self?.machine = Self.describe(state) }
+            // A machine cut off for abuse is reported to the platform, which
+            // ends the lease; the machine is discarded on its word, like any
+            // lease that ends.
+            let cli = CoreCLI(binary: binary, stateDirectory: stateDirectory)
+            let reporter = AbuseReporter(store: store) { record in
+                await Task.detached {
+                    AbuseOutcome(cli.reportAbuse(lease: record.lease, reason: record.reason, detail: record.detail))
+                }.value
+            }
+            reporter.onOutcome = { [weak self] _, outcome in self?.abuseStatus = Self.describe(outcome) }
+            controller.onNetworkAbuse = { [weak self] record in
+                self?.abuse = record
+                self?.abuseStatus = "telling the platform"
+                reporter.reportPending()
+            }
+            if let pending = AbuseRecord.load(store), !pending.reported {
+                abuse = pending
+                abuseStatus = "telling the platform"
+            }
+            reporter.reportPending()
+            self.reporter = reporter
             machines = controller
             // Old renter disks remain powered off until the platform has
             // confirmed which lease (if any) is currently entitled to run.
@@ -386,8 +427,56 @@ final class MinerModel: ObservableObject {
             let previous = lease
             lease = event.lease
             leaseEnds = event.endsAt
-            if previous != nil, lease == nil { updates.leaseEnded() }
+            if previous != nil, lease == nil {
+                updates.leaseEnded()
+                abuse = nil
+            }
+            // A new lease means mining is on again.
+            if let lease, lease != previous { miningOff = false; pausedUntil = nil }
         default: break
+        }
+    }
+
+    /// Opens the emergency stop for the lease now running.
+    func beginStop() {
+        guard let lease else { return }
+        stopLease = lease
+        stopState = .confirming
+    }
+
+    /// The owner confirmed the emergency stop.
+    func confirmStop(reason: String) {
+        guard let lease = stopLease, stopState == .confirming, let binary = Self.coreBinary() else { return }
+        stopState = .stopping
+        let cli = CoreCLI(binary: binary, stateDirectory: stateDirectory)
+        Task.detached {
+            let outcome = StopLeaseOutcome(cli.stopLease(lease: lease, reason: reason))
+            await MainActor.run { self.stopped(outcome) }
+        }
+    }
+
+    private func stopped(_ outcome: StopLeaseOutcome) {
+        switch outcome {
+        case .stopped(let reply):
+            NSLog("NodeEx: the owner stopped lease %@; the renter was refunded %@", reply.leaseID, reply.refunded)
+            stopState = .done(reply)
+            miningOff = !reply.mining
+            pausedUntil = reply.pausedUntil
+            // The lease ends, and its machine is erased, on the next
+            // heartbeat: the platform reports no lease.
+        case .leaseEnded:
+            stopState = .failed("The lease has already ended.")
+        case .failed(let why):
+            stopState = .failed("The lease was not stopped: \(why). Try again, or stop it from the mining dashboard.")
+        }
+    }
+
+    static func describe(_ outcome: AbuseOutcome) -> String {
+        switch outcome {
+        case .reported: return "reported; the platform ended the lease"
+        case .leaseEnded: return "the lease had already ended"
+        case .refused(let why): return "the platform refused the report: \(why)"
+        case .failed(let why): return "not reported yet (\(why)); trying again"
         }
     }
 
@@ -634,6 +723,15 @@ struct MenuContent: View {
             } else {
                 Text("Not rented")
             }
+            if let abuse = model.abuse {
+                Text("The renter's machine was cut off the network for abuse (\(abuse.reason.replacingOccurrences(of: "_", with: " "))): \(model.abuseStatus)")
+                    .lineLimit(3)
+            }
+            if model.miningOff {
+                Text("Mining is off. Turn it on again in the mining dashboard"
+                     + (model.pausedUntil.map { "; new orders resume \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "") + ".")
+                    .lineLimit(3)
+            }
             if !model.lastLog.isEmpty {
                 Divider()
                 Text(model.lastLog).lineLimit(2)
@@ -646,6 +744,13 @@ struct MenuContent: View {
             }
         }
         Divider()
+        if model.phase == .running && model.lease != nil {
+            Button("Stop this lease now…") {
+                model.beginStop()
+                openWindow(id: "stop-lease")
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
+        }
         if model.phase == .running && model.lease == nil {
             Button("Rebuild the renters' machine…") { model.rebuildMachine() }
         }
@@ -680,6 +785,66 @@ struct MenuContent: View {
     }
 }
 
+/// The owner's emergency stop: what it costs, said plainly, before it is done.
+struct StopLeaseView: View {
+    @ObservedObject var model: MinerModel
+    @State private var reason = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            switch model.stopState {
+            case .confirming, .stopping:
+                Text("Stop this lease now?").font(.title2).bold()
+                if let lease = model.stopLease {
+                    Text("Lease \(lease.prefix(8)) ends at once, and the renter's machine is erased.")
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("• The renter gets this period's rent back in full.")
+                    Text("• You are paid nothing for this period.")
+                    Text("• Mining on this node is switched off until you turn it back on in the mining dashboard.")
+                    Text("• Two stops within 30 days pause this node for 7 days.")
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                TextField("Reason (optional)", text: $reason, axis: .vertical)
+                    .lineLimit(3...5)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(model.stopState == .stopping)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.stopState == .stopping)
+                    Button(model.stopState == .stopping ? "Stopping…" : "Stop the lease") { model.confirmStop(reason: reason) }
+                        .disabled(model.stopState == .stopping || model.stopLease == nil)
+                }
+            case .done(let reply):
+                Text("The lease is stopped").font(.title2).bold()
+                Text("The renter was refunded $\(reply.refunded), this period's rent in full. You are paid nothing for it.")
+                Text("Mining on this node is now off. Turn it on again in the mining dashboard when you are ready.")
+                if let until = reply.pausedUntil {
+                    Text("This node was stopped twice within 30 days: it takes no new orders until \(until.formatted(date: .abbreviated, time: .shortened)).")
+                }
+                Text("The renter's machine is erased as soon as the platform confirms the lease has ended, within a minute.")
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Open the mining dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nodeex.com/mining")!) }
+                    Spacer()
+                    Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                }
+            case .failed(let why):
+                Text("The lease was not stopped").font(.title2).bold()
+                Text(why).textSelection(.enabled)
+                HStack {
+                    Spacer()
+                    Button("Close") { dismiss() }.keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(24)
+        .frame(width: 480, alignment: .leading)
+    }
+}
+
 /// Opens the setup window at launch when there is setup to do.
 struct Launcher: View {
     @ObservedObject var model: MinerModel
@@ -710,6 +875,10 @@ struct MinerApp: App {
         }
         Window("NodeEx Miner", id: "setup") {
             SetupView(model: model)
+        }
+        .windowResizability(.contentSize)
+        Window("Stop this lease", id: "stop-lease") {
+            StopLeaseView(model: model)
         }
         .windowResizability(.contentSize)
     }

@@ -52,6 +52,10 @@ node in service in the [quick start](https://nodeex.com/docs/miners/quickstart).
 - **Network.** It joins an encrypted WireGuard-based overlay. No port is opened on your router.
 - **Gate.** It forwards SSH (22) and remote desktop (5900) only for a connection that presents a lease token signed by
   the platform. Tokens last 10 minutes, and access ends when the lease does.
+- **Ending a lease at once.** If the renter's machine scans or floods others from your address, its network is cut
+  and the platform is told, which ends the lease. You can also stop a lease yourself from the menu ("Stop this lease
+  now…"): the renter gets the period's rent back, you are paid nothing for it, and mining is switched off until you
+  turn it back on.
 - **Connection test.** Before ordering, a renter's client may test the line to your Mac: a few pings, a download and
   an upload of at most 10 MB each, for at most 10 seconds, admitted by a single-use token from the platform. The Miner
   serves it itself; it never reaches the rented machine, and none runs while a lease is active. All tests together use

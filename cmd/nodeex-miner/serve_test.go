@@ -115,9 +115,9 @@ func TestAnswered(t *testing.T) {
 		err  error
 		want bool
 	}{
-		"refused by the platform":        {&statusError{401, "invalid signature"}, true},
-		"edge error page, platform down": {&statusError{530, "HTTP 530"}, true},
-		"wrapped status error":           {fmt.Errorf("heartbeat: %w", &statusError{502, "HTTP 502"}), true},
+		"refused by the platform":        {&statusError{Status: 401, msg: "invalid signature"}, true},
+		"edge error page, platform down": {&statusError{Status: 530, msg: "HTTP 530"}, true},
+		"wrapped status error":           {fmt.Errorf("heartbeat: %w", &statusError{Status: 502, msg: "HTTP 502"}), true},
 		"could not connect":              {&net.OpError{Op: "dial", Err: errors.New("connection refused")}, false},
 		"name did not resolve":           {&net.DNSError{Err: "no such host", Name: "app.nodeex.com"}, false},
 		"timed out":                      {context.DeadlineExceeded, false},

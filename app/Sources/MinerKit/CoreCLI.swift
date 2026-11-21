@@ -1,6 +1,7 @@
 import Foundation
 
-/// Runs the Go core's one-shot commands (status, enroll) for the app.
+/// Runs the Go core's one-shot commands (status, enroll, abuse, stop-lease)
+/// for the app.
 public struct CoreCLI: Sendable {
     public let binary: URL
     /// The core's state directory; nil for its default.
@@ -16,6 +17,11 @@ public struct CoreCLI: Sendable {
         public let output: String
         public let errors: String
         public var succeeded: Bool { status == 0 }
+        /// abuse and stop-lease: the lease is not the one the platform says
+        /// this node serves; it has already ended.
+        public var leaseNotCurrent: Bool { status == 3 }
+        /// abuse and stop-lease: the platform refused, for good.
+        public var refused: Bool { status == 4 }
         /// The last line the core wrote, which is its verdict.
         public var message: String {
             // The core lists unmet requirements on standard output, one per
@@ -36,7 +42,7 @@ public struct CoreCLI: Sendable {
         let p = Process()
         p.executableURL = binary
         var args = arguments
-        if let dir = stateDirectory, let command = arguments.first, ["status", "enroll", "run"].contains(command) {
+        if let dir = stateDirectory, let command = arguments.first, ["status", "enroll", "run", "abuse", "stop-lease"].contains(command) {
             args += ["-dir", dir.path]
         }
         p.arguments = args
@@ -52,6 +58,18 @@ public struct CoreCLI: Sendable {
 
     /// Whether this Mac has been enrolled as a node.
     public var isEnrolled: Bool { run(["status"]).succeeded }
+
+    /// Tells the platform the machine of lease was cut off the network for
+    /// abuse. The core keeps trying for up to half an hour until the
+    /// platform answers.
+    public func reportAbuse(lease: String, reason: String, detail: String) -> Result {
+        run(["abuse", "-lease", lease, "-reason", reason, "-detail", detail])
+    }
+
+    /// The owner's emergency stop of lease. Asked once.
+    public func stopLease(lease: String, reason: String) -> Result {
+        run(["stop-lease", "-lease", lease, "-reason", reason])
+    }
 
     /// Enrolls this Mac with a one-time code from the mining dashboard.
     public func enroll(code: String, api: String, force: Bool = false) -> Result {
