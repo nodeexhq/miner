@@ -34,6 +34,7 @@ import (
 	"github.com/nodeexhq/miner/internal/hostinfo"
 	"github.com/nodeexhq/miner/internal/hostspec"
 	"github.com/nodeexhq/miner/internal/requirements"
+	"github.com/nodeexhq/miner/pretest"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
@@ -362,6 +363,12 @@ func cmdRun(args []string) error {
 	// this can fail: the Miner then still reports and heartbeats, nobody can
 	// connect to it, and it tries again from the main loop.
 	state := &leaseState{}
+	// Connection tests a renter runs before ordering. Which tokens were
+	// used is kept beside the identity, so a restart cannot replay one.
+	tests, err := pretest.OpenGuard(filepath.Join(*dir, "pretest.json"), state.leased, nil)
+	if err != nil {
+		log.Printf("connection tests: %v", err)
+	}
 	myAddr := ""
 	var srv *tsnet.Server
 	defer func() {
@@ -392,7 +399,7 @@ func cmdRun(args []string) error {
 		log.Printf("gate listening on %s:%d (ssh -> %s, vnc -> %s)", myAddr, key.GatePort, *sshTarget, *vncTarget)
 		emit(event{Event: "gate", State: "open", Addr: myAddr})
 		go func() {
-			if err := serveGate(ctx, ln, id, state, gateTargets(*sshTarget, *vncTarget)); err != nil {
+			if err := serveGate(ctx, ln, id, state, gateTargets(*sshTarget, *vncTarget), tests); err != nil {
 				log.Printf("gate stopped: %v", err)
 				cancel()
 			}

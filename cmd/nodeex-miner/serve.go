@@ -18,6 +18,7 @@ import (
 	"github.com/nodeexhq/miner/gate"
 	"github.com/nodeexhq/miner/leasetoken"
 	"github.com/nodeexhq/miner/overlay"
+	"github.com/nodeexhq/miner/pretest"
 	"github.com/nodeexhq/miner/tunnel"
 	"tailscale.com/tsnet"
 )
@@ -32,6 +33,9 @@ type leaseState struct {
 	// suspended is set while the Miner is cut off from the platform. No
 	// lease is served until the platform is heard from again.
 	suspended bool
+	// test is the connection test being served, if any. It is cut the
+	// moment a lease starts.
+	test net.Conn
 }
 
 // activeWithin is how recently a connection must have carried data to count
@@ -127,6 +131,10 @@ func (s *leaseState) set(id string, endsAt time.Time) (previous string) {
 	if id != s.id {
 		s.dropLocked()
 	}
+	if id != "" && s.test != nil {
+		s.test.Close()
+		s.test = nil
+	}
 	s.id, s.endsAt = id, endsAt
 	// Hearing from the platform ends any suspension.
 	s.suspended = false
@@ -170,6 +178,34 @@ func (s *leaseState) untrack(conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.conns, conn)
+}
+
+// leased reports whether the Miner knows of a lease on this node, served or
+// not (suspended, or in its grace period): no connection test then.
+func (s *leaseState) leased() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.id != ""
+}
+
+// trackTest registers a connection test. It refuses if a lease has started
+// since the test was admitted.
+func (s *leaseState) trackTest(conn net.Conn) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.id != "" || s.test != nil {
+		return false
+	}
+	s.test = conn
+	return true
+}
+
+func (s *leaseState) untrackTest(conn net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.test == conn {
+		s.test = nil
+	}
 }
 
 // maxHandshakes is how many connections may be in the gate handshake at the
@@ -235,12 +271,13 @@ func overlayAddr(ctx context.Context, srv *tsnet.Server) (string, error) {
 
 // serveGate accepts overlay connections, admits those holding a token for
 // the current lease, and forwards them to the leased machine's services.
-func serveGate(ctx context.Context, ln net.Listener, id identity, state *leaseState, targets map[string]string) error {
+// Connection tests (tests may be nil: none) are served by the Miner itself.
+func serveGate(ctx context.Context, ln net.Listener, id identity, state *leaseState, targets map[string]string, tests *pretest.Guard) error {
 	platformKey, err := base64.StdEncoding.DecodeString(id.PlatformKey)
 	if err != nil || len(platformKey) != ed25519.PublicKeySize {
 		return errors.New("identity file has no valid platform key; enroll again")
 	}
-	verifier := gate.Verifier{PlatformKey: platformKey, NodeID: id.NodeID, CurrentLease: state.current}
+	verifier := gate.Verifier{PlatformKey: platformKey, NodeID: id.NodeID, CurrentLease: state.current, Tests: tests}
 
 	// Anyone on the overlay can open connections to the gate. Bound how
 	// many may be mid-handshake at once, so a flood of idle connections
@@ -266,12 +303,17 @@ func serveGate(ctx context.Context, ln net.Listener, id identity, state *leaseSt
 		go func() {
 			defer conn.Close()
 			conn := newActiveConn(conn)
-			service, claims, err := verifier.Accept(conn)
+			admitted, err := verifier.Accept(conn)
 			<-handshakes
 			if err != nil {
 				log.Printf("gate: refused %s: %v", conn.RemoteAddr(), err)
 				return
 			}
+			if admitted.Test != nil {
+				serveTest(conn, admitted, state)
+				return
+			}
+			service, claims := admitted.Service, admitted.Claims
 			if !state.track(claims.LeaseID, conn) {
 				return
 			}
@@ -289,6 +331,30 @@ func serveGate(ctx context.Context, ln net.Listener, id identity, state *leaseSt
 			log.Printf("gate: %s closed for lease %s", service, claims.LeaseID)
 		}()
 	}
+}
+
+// serveTest runs an admitted connection test. It is the Miner's own
+// traffic, never the rented machine's, and is cut if a lease starts.
+func serveTest(conn net.Conn, a gate.Admitted, state *leaseState) {
+	c := a.Claims
+	if !state.trackTest(conn) {
+		a.Test.Done(0)
+		log.Printf("gate: test for reservation %s refused: a lease started", c.ReservationID)
+		return
+	}
+	defer state.untrackTest(conn)
+	log.Printf("gate: test %s for reservation %s (account %s) from %s, limits %+v", c.TokenID, c.ReservationID, c.Account, conn.RemoteAddr(), a.Test.Limits)
+	rep, err := pretest.Serve(conn, a.Test.Limits, a.At)
+	if derr := a.Test.Done(rep.Moved()); derr != nil {
+		log.Printf("gate: could not record the test's cost: %v", derr)
+	}
+	outcome := "complete"
+	if err != nil {
+		outcome = err.Error()
+	}
+	log.Printf("gate: test %s ended (%s): %d pings, %d bytes down in %s, %d up in %s, %d bytes moved",
+		c.TokenID, outcome, rep.Pings, rep.DownSent, rep.DownElapsed.Round(time.Millisecond),
+		rep.UpReceived, rep.UpElapsed.Round(time.Millisecond), rep.Moved())
 }
 
 func gateTargets(ssh, vnc string) map[string]string {

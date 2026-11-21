@@ -31,6 +31,14 @@ type Claims struct {
 	Services  []string `json:"services"`
 	IssuedAt  int64    `json:"iat"`
 	ExpiresAt int64    `json:"exp"`
+
+	// The fields below are set on test tokens only (see test.go); a lease
+	// token leaves them out.
+	Scope         string      `json:"scope,omitempty"`
+	TokenID       string      `json:"jti,omitempty"`
+	ReservationID string      `json:"reservation_id,omitempty"`
+	Account       string      `json:"acct,omitempty"`
+	Test          *TestLimits `json:"test,omitempty"`
 }
 
 var (
@@ -39,6 +47,9 @@ var (
 	ErrExpired   = errors.New("leasetoken: token expired")
 	ErrWrongNode = errors.New("leasetoken: token was issued for a different node")
 	ErrService   = errors.New("leasetoken: token does not grant this service")
+	// ErrScope: a test token presented for a lease service, or a lease
+	// token for the test service.
+	ErrScope = errors.New("leasetoken: token is not of the kind this service takes")
 )
 
 var enc = base64.RawURLEncoding
@@ -56,8 +67,17 @@ func Issue(priv ed25519.PrivateKey, c Claims) (string, error) {
 
 // Verify checks the token's signature and expiry, and that it grants service
 // on nodeID. Callers must additionally check Claims.LeaseID against the
-// lease they currently hold.
+// lease they currently hold. A test token only verifies for ServiceTest, and
+// a lease token never does; use VerifyTest for test tokens.
 func Verify(pub ed25519.PublicKey, token, nodeID, service string, now time.Time) (Claims, error) {
+	c, err := verify(pub, token, nodeID, service, now)
+	if err == nil && (c.Scope == ScopeTest) != (service == ServiceTest) {
+		return c, ErrScope
+	}
+	return c, err
+}
+
+func verify(pub ed25519.PublicKey, token, nodeID, service string, now time.Time) (Claims, error) {
 	var c Claims
 	p, s, ok := strings.Cut(token, ".")
 	if !ok {

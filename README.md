@@ -52,6 +52,10 @@ node in service in the [quick start](https://nodeex.com/docs/miners/quickstart).
 - **Network.** It joins an encrypted WireGuard-based overlay. No port is opened on your router.
 - **Gate.** It forwards SSH (22) and remote desktop (5900) only for a connection that presents a lease token signed by
   the platform. Tokens last 10 minutes, and access ends when the lease does.
+- **Connection test.** Before ordering, a renter's client may test the line to your Mac: a few pings, a download and
+  an upload of at most 10 MB each, for at most 10 seconds, admitted by a single-use token from the platform. The Miner
+  serves it itself; it never reaches the rented machine, and none runs while a lease is active. All tests together use
+  at most 200 MB an hour.
 
 While a lease is running, the renter has a login on the machine. Contribute a Mac you do not otherwise use: a new or
 freshly erased one is recommended. The Miner has nothing to do with cryptocurrency mining.
@@ -143,7 +147,8 @@ owner's VM or exercise third-party desktop clients.
 | --- | --- |
 | `cmd/nodeex-miner` | The program |
 | `gate` | Checks lease tokens and forwards the two ports |
-| `leasetoken` | The lease token format and its signature check |
+| `leasetoken` | The lease and test token format and its signature check |
+| `pretest` | The pre-order connection test: its protocol, client and server, and who may run one |
 | `overlay` | Joining the overlay network |
 | `tunnel` | TCP forwarding |
 | `internal/` | Device signatures, hardware detection, the minimum requirements |

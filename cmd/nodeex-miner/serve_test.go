@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ func TestGateBoundsPendingHandshakes(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go serveGate(ctx, ln, id, &leaseState{}, gateTargets("127.0.0.1:1", "127.0.0.1:1"))
+	go serveGate(ctx, ln, id, &leaseState{}, gateTargets("127.0.0.1:1", "127.0.0.1:1"), nil)
 
 	const flood = maxHandshakes + 12
 	var conns []net.Conn
@@ -126,5 +127,42 @@ func TestAnswered(t *testing.T) {
 		if got := answered(c.err); got != c.want {
 			t.Errorf("%s: answered = %v, want %v", name, got, c.want)
 		}
+	}
+}
+
+// A connection test never runs alongside a lease: none starts while one is
+// known, and one running is cut the moment a lease starts.
+func TestLeaseStateCutsTest(t *testing.T) {
+	s := &leaseState{}
+	c, peer := net.Pipe()
+	defer peer.Close()
+	if s.leased() || !s.trackTest(c) {
+		t.Fatal("test refused on an idle node")
+	}
+	if s.trackTest(newActiveConn(c)) {
+		t.Error("second test tracked")
+	}
+	if sessions, _ := s.snapshot(); sessions != 0 {
+		t.Errorf("a test counted as %d renter session(s)", sessions)
+	}
+	s.set("", time.Time{}) // an idle heartbeat changes nothing
+	peer.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("test cut by an idle heartbeat: %v", err)
+	}
+	s.set("lease-1", time.Now().Add(time.Hour))
+	peer.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := peer.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("test still open after a lease started: %v", err)
+	}
+	s.untrackTest(c)
+	c2, _ := net.Pipe()
+	if !s.leased() || s.trackTest(c2) {
+		t.Error("test tracked during a lease")
+	}
+	// Suspended or past its end, the lease is still the node's: no test.
+	s.suspend()
+	if !s.leased() {
+		t.Error("suspended lease not counted")
 	}
 }

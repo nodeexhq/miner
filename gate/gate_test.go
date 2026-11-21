@@ -54,7 +54,9 @@ func (f *fixture) handshake(service, token string) (acceptedService string, serv
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		acceptedService, _, serverErr = f.verifier().Accept(s)
+		var a Admitted
+		a, serverErr = f.verifier().Accept(s)
+		acceptedService = a.Service
 	}()
 	clientErr = Dial(c, service, token)
 	<-done
@@ -112,7 +114,7 @@ func TestAcceptRejectsMalformedPreambles(t *testing.T) {
 		// A pipe is unbuffered, so read the reply concurrently with writing.
 		go io.WriteString(c, preamble)
 		go io.Copy(io.Discard, c)
-		_, _, err := f.verifier().Accept(s)
+		_, err := f.verifier().Accept(s)
 		if !errors.Is(err, ErrProtocol) {
 			t.Errorf("%s: got %v, want ErrProtocol", name, err)
 		}
@@ -131,7 +133,7 @@ func TestHandshakeLeavesPayloadIntact(t *testing.T) {
 
 	got := make(chan string, 1)
 	go func() {
-		if _, _, err := f.verifier().Accept(s); err != nil {
+		if _, err := f.verifier().Accept(s); err != nil {
 			got <- "accept: " + err.Error()
 			return
 		}

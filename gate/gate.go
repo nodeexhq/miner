@@ -8,6 +8,10 @@
 //
 // The overlay network's ACL only decides who can reach the Miner at all;
 // this handshake is what ties a connection to a paid, current lease.
+//
+// One service is not a lease's: "test", the connection test a renter runs
+// before ordering (package pretest). It takes only a test token, which is
+// good for nothing else, and only while no lease is active on the node.
 package gate
 
 import (
@@ -20,6 +24,7 @@ import (
 	"time"
 
 	"github.com/nodeexhq/miner/leasetoken"
+	"github.com/nodeexhq/miner/pretest"
 )
 
 const (
@@ -31,7 +36,14 @@ const (
 var (
 	ErrProtocol = errors.New("gate: malformed handshake")
 	ErrNoLease  = errors.New("gate: token is not for the node's current lease")
+	ErrNoTests  = errors.New("gate: this node does not run connection tests")
+	ErrIssuedAt = errors.New("gate: test token issued in the future")
 )
+
+// issuedSkew is how far ahead of the Miner's clock a test token's issue
+// time may be. Without a bound, a token issued "later" would outlive the
+// five minutes a test token may live.
+const issuedSkew = time.Minute
 
 // Refused is returned by Dial when the Miner rejects the handshake.
 type Refused struct{ Reason string }
@@ -69,50 +81,91 @@ type Verifier struct {
 	// on this node, or "" when there is none.
 	CurrentLease func() string
 	Now          func() time.Time
+	// Tests admits connection tests; nil refuses the test service.
+	Tests *pretest.Guard
 }
 
-// Accept performs the Miner side of the handshake. It returns the requested
-// service and the verified claims, or an error after telling the client it
-// was refused.
-func (v Verifier) Accept(conn net.Conn) (string, leasetoken.Claims, error) {
+// Admitted is a connection the gate let through.
+type Admitted struct {
+	Service string
+	Claims  leasetoken.Claims
+	// Test is the admitted test, for the test service. The caller must
+	// end it with Done.
+	Test *pretest.Ticket
+	// At is when the gate sent OK: a test's time runs from here.
+	At time.Time
+}
+
+// Accept performs the Miner side of the handshake. It returns what it
+// admitted, or an error after telling the client it was refused.
+func (v Verifier) Accept(conn net.Conn) (Admitted, error) {
 	conn.SetDeadline(time.Now().Add(handshakeTimeout))
 	defer conn.SetDeadline(time.Time{})
 
-	service, claims, err := v.check(conn)
+	a, err := v.check(conn)
 	if err != nil {
 		// The reason sent to the client is deliberately coarse.
 		fmt.Fprintf(conn, "ERR %s\n", publicReason(err))
-		return "", claims, err
+		return Admitted{Claims: a.Claims}, err
 	}
 	if _, err := io.WriteString(conn, "OK\n"); err != nil {
-		return "", claims, err
+		if a.Test != nil {
+			a.Test.Done(0)
+		}
+		return Admitted{Claims: a.Claims}, err
 	}
-	return service, claims, nil
+	a.At = time.Now()
+	return a, nil
 }
 
-func (v Verifier) check(conn net.Conn) (string, leasetoken.Claims, error) {
-	var none leasetoken.Claims
+func (v Verifier) check(conn net.Conn) (Admitted, error) {
+	var a Admitted
 	line, err := readLine(conn, maxPreamble)
 	if err != nil {
-		return "", none, ErrProtocol
+		return a, ErrProtocol
 	}
 	parts := strings.Split(line, " ")
 	if len(parts) != 3 || parts[0] != magic {
-		return "", none, ErrProtocol
+		return a, ErrProtocol
 	}
 	service, token := parts[1], parts[2]
 	now := time.Now
 	if v.Now != nil {
 		now = v.Now
 	}
-	claims, err := leasetoken.Verify(v.PlatformKey, token, v.NodeID, service, now())
+	if service == leasetoken.ServiceTest {
+		return v.checkTest(token, now())
+	}
+	// Verify refuses a test token for any other service.
+	a.Claims, err = leasetoken.Verify(v.PlatformKey, token, v.NodeID, service, now())
 	if err != nil {
-		return "", claims, err
+		return a, err
 	}
-	if cur := v.CurrentLease(); cur == "" || cur != claims.LeaseID {
-		return "", claims, ErrNoLease
+	if cur := v.CurrentLease(); cur == "" || cur != a.Claims.LeaseID {
+		return a, ErrNoLease
 	}
-	return service, claims, nil
+	a.Service = service
+	return a, nil
+}
+
+// checkTest admits a connection test: a well-formed test token for this
+// node, never used before, while the node is free for one.
+func (v Verifier) checkTest(token string, now time.Time) (Admitted, error) {
+	a := Admitted{Service: leasetoken.ServiceTest}
+	var err error
+	if v.Tests == nil {
+		return a, ErrNoTests
+	}
+	// VerifyTest refuses a lease token, and checks services == ["test"],
+	// an id, a reservation, no lease, and exp - iat <= TestTTL.
+	if a.Claims, err = leasetoken.VerifyTest(v.PlatformKey, token, v.NodeID, now); err != nil {
+		return a, err
+	}
+	if a.Claims.IssuedAt > now.Add(issuedSkew).Unix() {
+		return a, ErrIssuedAt
+	}
+	a.Test, err = v.Tests.Admit(a.Claims)
+	return a, err
 }
 
 func publicReason(err error) string {
@@ -123,6 +176,10 @@ func publicReason(err error) string {
 		return "token-expired"
 	case errors.Is(err, ErrNoLease):
 		return "no-active-lease"
+	case errors.Is(err, pretest.ErrTokenUsed):
+		return "token-used"
+	case errors.Is(err, pretest.ErrBusy):
+		return "busy"
 	default:
 		return "unauthorized"
 	}
