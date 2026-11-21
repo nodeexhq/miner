@@ -12,7 +12,7 @@
 // fixed body, all integers unsigned big-endian. The phases run once each, in
 // order:
 //
-//	P  C: PING seq:u32 t:u64        S: PONG seq:u32 t:u64     (exactly Pings times)
+//	P  C: PING seq:u32 t:u64        S: PONG seq:u32 t:u64     (1 to Pings times)
 //	D  C: DOWN bytes:u32            S: DATA... then DONE sent:u64 elapsed_us:u64
 //	U  C: UP bytes:u32, DATA..., END sent:u64
 //	                                S: UPRESULT received:u64 counted:u64 elapsed_us:u64
@@ -20,7 +20,9 @@
 //
 // DATA is len:u16 (1..16384) followed by that many bytes. The server stops a
 // download when the requested bytes are sent or DownWindow has passed since
-// DOWN. Either side may send ERR code:u8 n:u8 reason:n bytes and close. The
+// DOWN; the client stops pinging after PingWindow and uploading after
+// UpWindow, so that the whole test fits in its 10 seconds on a slow line
+// with a long round trip. Either side may send ERR code:u8 n:u8 reason:n bytes and close. The
 // Miner closes the connection the test's MaxSeconds after it sent OK.
 package pretest
 
@@ -57,10 +59,16 @@ const (
 const (
 	// MaxData is the largest DATA payload.
 	MaxData = 16384
-	// DownWindow is how long the server streams a download at most, and
-	// UpWindow how long the client streams an upload at most.
-	DownWindow = 4000 * time.Millisecond
-	UpWindow   = 4000 * time.Millisecond
+	// PingWindow is how long the client goes on pinging (it sends at
+	// least one PING, and at most the token's pings). DownWindow is how
+	// long the server streams a download at most, and UpWindow how long
+	// the client streams an upload at most. They add up to 8.5 s, leaving
+	// 1.5 s of a 10 s test for some six round trips and for whatever the
+	// path's buffers still hold when a window closes: enough at 150 ms on
+	// a fast line, not at 300 ms or on a slow line with deep buffers.
+	PingWindow = 2500 * time.Millisecond
+	DownWindow = 3000 * time.Millisecond
+	UpWindow   = 3000 * time.Millisecond
 )
 
 // bodyLen is the fixed body length of every frame type but DATA and ERR.

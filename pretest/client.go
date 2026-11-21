@@ -16,7 +16,7 @@ import (
 // Options say how much of a test the client runs. Each must be within the
 // test token's limits, or the Miner refuses the test part-way.
 type Options struct {
-	Pings     int
+	Pings     int // at most; the client stops after PingWindow, having sent at least one
 	DownBytes int64
 	UpBytes   int64
 }
@@ -130,6 +130,9 @@ func (c *client) run(opt Options, res *Result) error {
 	// P.
 	epoch := time.Now()
 	for seq := range opt.Pings {
+		if seq > 0 && time.Since(epoch) >= PingWindow {
+			break
+		}
 		sent := time.Since(epoch)
 		if err := c.write(frame(FramePing, uint64(seq), uint64(sent))); err != nil {
 			return err

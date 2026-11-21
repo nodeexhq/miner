@@ -130,7 +130,7 @@ func (s *server) next(buf []byte, want ...byte) (byte, []byte, error) {
 func (s *server) run() error {
 	buf := make([]byte, MaxData)
 
-	// P: exactly lim.Pings round trips, then DOWN.
+	// P: 1 to lim.Pings round trips (none when the limit is 0), then DOWN.
 	var down uint64
 	for {
 		t, body, err := s.next(buf, FramePing, FrameDown)
@@ -141,8 +141,8 @@ func (s *server) run() error {
 			return refuse(CodeOverLimit, "more than %d pings", s.lim.Pings)
 		}
 		if t == FrameDown {
-			if s.rep.Pings < s.lim.Pings {
-				return fmt.Errorf("%w: DOWN after %d of %d pings", ErrProtocol, s.rep.Pings, s.lim.Pings)
+			if s.rep.Pings < min(1, s.lim.Pings) {
+				return fmt.Errorf("%w: DOWN before any PING", ErrProtocol)
 			}
 			down = u32(body)
 			break
