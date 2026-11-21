@@ -29,8 +29,9 @@ import (
 // over them costs a second's delay, nothing more.
 //
 // Hard: a pattern that normal work does not make (many hosts or many ports
-// of one host contacted in a minute, many connection attempts left
-// unanswered, a rate exceeded without pause for half a minute) cuts the
+// of one host contacted in a minute, connection attempts unanswered at
+// many distinct hosts and ports, a rate exceeded without pause for a
+// minute) cuts the
 // machine's network both ways and reports it, once, as a JSON line on
 // standard output. The cut is sticky: see filteredConn.leaseHold.
 //
@@ -46,7 +47,7 @@ import (
 type abuseLimits struct {
 	Off bool `json:"off,omitempty"`
 	// New outbound flows: TCP connection attempts (a SYN without ACK) and
-	// UDP or ping flows (the first packet to a host and port in a minute).
+	// UDP or ping flows (the first packet to a host and port in window_sec).
 	NewFlowsPerSec float64 `json:"new_flows_per_sec,omitempty"`
 	NewFlowsBurst  float64 `json:"new_flows_burst,omitempty"`
 	// UDP (and ping) packets per second to destinations that have not
@@ -56,13 +57,23 @@ type abuseLimits struct {
 	// All UDP (and ping) packets per second, answered or not.
 	UDPAllPerSec float64 `json:"udp_all_pps,omitempty"`
 	UDPAllBurst  float64 `json:"udp_all_burst,omitempty"`
-	// Patterns, each counted over the last minute.
-	DistinctIPs    int `json:"distinct_ips_per_min,omitempty"`
-	PortsPerIP     int `json:"ports_per_ip_per_min,omitempty"`
-	UnansweredSYNs int `json:"unanswered_syns_per_min,omitempty"`
-	// How long a soft limit may be exceeded without pause before it counts
-	// as a pattern.
+	// Patterns, each counted over the last window_sec: distinct hosts
+	// contacted, distinct ports of one host, and distinct targets (host and
+	// port) whose connection attempts were refused or went unanswered.
+	DistinctIPs       int `json:"distinct_ips,omitempty"`
+	PortsPerIP        int `json:"ports_per_ip,omitempty"`
+	UnansweredTargets int `json:"unanswered_targets,omitempty"`
+	// How long a soft limit may be exceeded, with no gap between drops
+	// longer than breach_gap_sec, before it counts as a pattern.
 	SustainedSec float64 `json:"sustained_sec,omitempty"`
+	BreachGapSec float64 `json:"breach_gap_sec,omitempty"`
+	// The window of the patterns, and how long a UDP flow stays known.
+	WindowSec float64 `json:"window_sec,omitempty"`
+	// How long a connection attempt may wait for its SYN-ACK before it
+	// counts as unanswered.
+	SYNTimeoutSec float64 `json:"syn_timeout_sec,omitempty"`
+	// A UDP destination that sent something back this recently is answered.
+	AnsweredSec float64 `json:"answered_sec,omitempty"`
 }
 
 // The defaults, and why.
@@ -91,7 +102,7 @@ type abuseLimits struct {
 // Distinct hosts, 1000 a minute. A heavy page reaches 50 to 150 addresses
 // (ads, analytics, CDNs); restoring a browser with many tabs can reach a
 // few hundred. Scanning many hosts is mostly caught sooner by the
-// unanswered-SYN count (most hosts do not answer on a given port), so this
+// unanswered-target count (most hosts do not answer on a given port), so this
 // one can be generous and still stop a sweep of responsive hosts within
 // seconds.
 //
@@ -101,45 +112,49 @@ type abuseLimits struct {
 // both stay under 100 except an FTP mirror of many small files. A port scan
 // (nmap's default is the top 1000 ports) passes 100 within a second.
 //
-// Unanswered SYNs, 300 a minute. An attempt counts when the far end refused
-// it or did not answer in 35 s (the network's own dial gives up at 30 s; it
-// answers the machine's SYN only once the real connection is made). A
-// program retrying a dead server makes a few a second at most, and backs
-// off; a scan of a thousand hosts or a flood of a silent one makes
-// hundreds within seconds.
+// Unanswered targets, 150 distinct a minute. A target is a host and port;
+// it counts once its connection attempt was refused or not answered in
+// 35 s (the network's own dial gives up at 30 s; it answers the machine's
+// SYN only once the real connection is made). Targets are counted, not
+// attempts, because what fails in normal life fails over and over at the
+// same few places: a program retrying a dead server, however tightly; the
+// owner's internet going down, or the minute after waking from sleep, when
+// everything the machine was talking to (a few dozen hosts, rarely more
+// than a hundred: DNS is down too, so nothing new is looked up) fails at
+// once. A scan is the opposite: each probe is a new target, and most of
+// them do not answer (a sweep of one port across random hosts finds well
+// under one in ten open), so a scan passes 150 within seconds of its
+// first timeouts, or at once where targets refuse.
 //
-// Sustained, 30 s: a soft limit exceeded in every few seconds for half a
-// minute is not a burst.
+// Sustained, 60 s, with no gap over 2 s between drops: a short burst over
+// a soft limit never cuts, however large. A minute without pause over the
+// new-flow rate is a load test or a flood, and both use the owner's address
+// against someone else's server; a minute over the UDP rates is a flood.
 var defaultAbuse = abuseLimits{
-	NewFlowsPerSec: 60,
-	NewFlowsBurst:  200,
-	UDPPerSec:      2000,
-	UDPBurst:       4000,
-	UDPAllPerSec:   10000,
-	UDPAllBurst:    20000,
-	DistinctIPs:    1000,
-	PortsPerIP:     100,
-	UnansweredSYNs: 300,
-	SustainedSec:   30,
+	NewFlowsPerSec:    60,
+	NewFlowsBurst:     200,
+	UDPPerSec:         2000,
+	UDPBurst:          4000,
+	UDPAllPerSec:      10000,
+	UDPAllBurst:       20000,
+	DistinctIPs:       1000,
+	PortsPerIP:        100,
+	UnansweredTargets: 150,
+	SustainedSec:      60,
+	BreachGapSec:      2,
+	WindowSec:         60,
+	SYNTimeoutSec:     35,
+	AnsweredSec:       10,
 }
 
 const (
-	abuseWindow = 60 * time.Second
-	// A UDP destination that sent something back this recently is answered.
-	answeredFor = 10 * time.Second
-	// How long an outbound SYN may wait for its SYN-ACK.
-	synTimeout = 35 * time.Second
-	// A soft limit counts as exceeded without pause while drops are no
-	// further apart than this.
-	breachGap = 2 * time.Second
-
 	// Table sizes. A full table is far past the thresholds (that many hosts
 	// or flows in a minute, or attempts in flight), so evicting an entry
 	// to make room loses nothing that matters.
 	maxIPs     = 8192
 	maxPairs   = 16384
 	maxPending = 4096
-	maxRing    = 4096
+	maxTargets = 4096
 )
 
 // effective returns the limits with defaults filled in. Disabled checks
@@ -155,6 +170,13 @@ func (l abuseLimits) effective() abuseLimits {
 		}
 		return v
 	}
+	// Durations cannot be turned off; out of range is clamped.
+	pickD := func(v, d, lo, hi float64) float64 {
+		if v <= 0 {
+			return d
+		}
+		return min(max(v, lo), hi)
+	}
 	pickI := func(v, d, ceiling int) int {
 		switch {
 		case v < 0:
@@ -166,17 +188,21 @@ func (l abuseLimits) effective() abuseLimits {
 	}
 	d := defaultAbuse
 	return abuseLimits{
-		Off:            l.Off,
-		NewFlowsPerSec: pickF(l.NewFlowsPerSec, d.NewFlowsPerSec),
-		NewFlowsBurst:  pickF(l.NewFlowsBurst, d.NewFlowsBurst),
-		UDPPerSec:      pickF(l.UDPPerSec, d.UDPPerSec),
-		UDPBurst:       pickF(l.UDPBurst, d.UDPBurst),
-		UDPAllPerSec:   pickF(l.UDPAllPerSec, d.UDPAllPerSec),
-		UDPAllBurst:    pickF(l.UDPAllBurst, d.UDPAllBurst),
-		DistinctIPs:    pickI(l.DistinctIPs, d.DistinctIPs, maxIPs/2),
-		PortsPerIP:     pickI(l.PortsPerIP, d.PortsPerIP, maxPairs/2),
-		UnansweredSYNs: pickI(l.UnansweredSYNs, d.UnansweredSYNs, maxRing-1),
-		SustainedSec:   pickF(l.SustainedSec, d.SustainedSec),
+		Off:               l.Off,
+		NewFlowsPerSec:    pickF(l.NewFlowsPerSec, d.NewFlowsPerSec),
+		NewFlowsBurst:     pickF(l.NewFlowsBurst, d.NewFlowsBurst),
+		UDPPerSec:         pickF(l.UDPPerSec, d.UDPPerSec),
+		UDPBurst:          pickF(l.UDPBurst, d.UDPBurst),
+		UDPAllPerSec:      pickF(l.UDPAllPerSec, d.UDPAllPerSec),
+		UDPAllBurst:       pickF(l.UDPAllBurst, d.UDPAllBurst),
+		DistinctIPs:       pickI(l.DistinctIPs, d.DistinctIPs, maxIPs/2),
+		PortsPerIP:        pickI(l.PortsPerIP, d.PortsPerIP, maxPairs/2),
+		UnansweredTargets: pickI(l.UnansweredTargets, d.UnansweredTargets, maxTargets/2),
+		SustainedSec:      pickF(l.SustainedSec, d.SustainedSec),
+		BreachGapSec:      pickD(l.BreachGapSec, d.BreachGapSec, 0.5, 30),
+		WindowSec:         pickD(l.WindowSec, d.WindowSec, 5, 600),
+		SYNTimeoutSec:     pickD(l.SYNTimeoutSec, d.SYNTimeoutSec, 5, 300),
+		AnsweredSec:       pickD(l.AnsweredSec, d.AnsweredSec, 1, 300),
 	}
 }
 
@@ -239,41 +265,13 @@ type streak struct{ start, last, logged int64 }
 
 // hit records a drop and returns how long the streak has lasted, and
 // whether it just began.
-func (s *streak) hit(now int64) (time.Duration, bool) {
-	began := s.last == 0 || now-s.last > int64(breachGap)
+func (s *streak) hit(now, gap int64) (time.Duration, bool) {
+	began := s.last == 0 || now-s.last > gap
 	if began {
 		s.start = now
 	}
 	s.last = now
 	return time.Duration(now - s.start), began
-}
-
-// ring counts events in the last abuseWindow, exactly, in room for
-// threshold+1 of them.
-type ring struct {
-	times []int64
-	next  int
-	n     int
-}
-
-func (r *ring) reset(threshold int) {
-	r.times = make([]int64, threshold+1)
-	r.next, r.n = 0, 0
-}
-
-// add records an event and reports whether more than the threshold fell in
-// the window.
-func (r *ring) add(now int64) bool {
-	if len(r.times) <= 1 {
-		return false // off
-	}
-	r.times[r.next] = now
-	r.next = (r.next + 1) % len(r.times)
-	if r.n < len(r.times) {
-		r.n++
-	}
-	// Full: the oldest of threshold+1 events is the next slot.
-	return r.n == len(r.times) && now-r.times[r.next] <= int64(abuseWindow)
 }
 
 type pairKey struct {
@@ -310,19 +308,21 @@ type abuseGuard struct {
 	// Frames dropped by the soft limits.
 	droppedFlows, droppedUDP atomic.Uint64
 
-	mu        sync.Mutex
-	cfg       abuseLimits
-	newFlows  rate
-	udpQuiet  rate
-	udpAll    rate
-	ips       map[uint32]int64 // host -> last new flow to it
-	pairs     map[pairKey]pairEntry
-	portsOf   map[uint32]int // host -> its entries in pairs
-	pending   map[synKey]int64
-	noAnswer  ring
-	flowRun   streak
-	udpRun    streak
-	lastSweep int64
+	mu       sync.Mutex
+	cfg      abuseLimits
+	newFlows rate
+	udpQuiet rate
+	udpAll   rate
+	ips      map[uint32]int64 // host -> last new flow to it
+	pairs    map[pairKey]pairEntry
+	portsOf  map[uint32]int // host -> its entries in pairs
+	pending  map[synKey]int64
+	failed   map[pairKey]int64 // target -> last unanswered attempt at it
+	// The durations of cfg, in nanoseconds.
+	window, synTimeout, answeredFor, breachGap int64
+	flowRun                                    streak
+	udpRun                                     streak
+	lastSweep                                  int64
 }
 
 func newAbuseGuard(gateway [4]byte, report func(abuseEvent)) *abuseGuard {
@@ -334,6 +334,7 @@ func newAbuseGuard(gateway [4]byte, report func(abuseEvent)) *abuseGuard {
 		pairs:   map[pairKey]pairEntry{},
 		portsOf: map[uint32]int{},
 		pending: map[synKey]int64{},
+		failed:  map[pairKey]int64{},
 	}
 	g.set(abuseLimits{})
 	return g
@@ -344,10 +345,9 @@ func (g *abuseGuard) set(l abuseLimits) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	e := l.effective()
-	if g.cfg.UnansweredSYNs != e.UnansweredSYNs || g.noAnswer.times == nil {
-		g.noAnswer.reset(e.UnansweredSYNs)
-	}
 	g.cfg = e
+	sec := func(v float64) int64 { return int64(v * float64(time.Second)) }
+	g.window, g.synTimeout, g.answeredFor, g.breachGap = sec(e.WindowSec), sec(e.SYNTimeoutSec), sec(e.AnsweredSec), sec(e.BreachGapSec)
 	g.newFlows.set(e.NewFlowsPerSec, e.NewFlowsBurst)
 	g.udpQuiet.set(e.UDPPerSec, e.UDPBurst)
 	g.udpAll.set(e.UDPAllPerSec, e.UDPAllBurst)
@@ -483,7 +483,7 @@ func (g *abuseGuard) syn(p packet4, now int64) bool {
 		// them: one makes room, counted as unanswered.
 		for old := range g.pending {
 			delete(g.pending, old)
-			g.unanswered(now, "evicted")
+			g.unanswered(old, now, "evicted")
 			break
 		}
 	}
@@ -498,7 +498,7 @@ func (g *abuseGuard) datagram(p packet4, now int64) bool {
 	}
 	k := pairKey{p.dst, port, p.proto}
 	e, known := g.pairs[k]
-	if known && now-e.seen > int64(abuseWindow) {
+	if known && now-e.seen > g.window {
 		g.forget(k) // stale, not yet swept: a new flow
 		known = false
 	}
@@ -509,7 +509,7 @@ func (g *abuseGuard) datagram(p packet4, now int64) bool {
 		}
 		e = g.pairs[k]
 	}
-	answered := e.reply != 0 && now-e.reply <= int64(answeredFor)
+	answered := e.reply != 0 && now-e.reply <= g.answeredFor
 	quietOK := answered || g.udpQuiet.room(now)
 	if !quietOK || !g.udpAll.room(now) {
 		g.droppedUDP.Add(1)
@@ -555,7 +555,7 @@ func (g *abuseGuard) contact(ip uint32, port uint16, proto byte, now int64) {
 		g.pairs[k] = pairEntry{seen: now}
 		g.portsOf[ip]++
 		if n := g.cfg.PortsPerIP; n > 0 && g.portsOf[ip] > n {
-			g.trip(reasonPortScan, fmt.Sprintf("more than %d ports of %s in a minute", n, ipString(ip)))
+			g.trip(reasonPortScan, fmt.Sprintf("more than %d ports of %s in %.0f s", n, ipString(ip), g.cfg.WindowSec))
 			return
 		}
 	}
@@ -567,7 +567,7 @@ func (g *abuseGuard) contact(ip uint32, port uint16, proto byte, now int64) {
 	}
 	g.ips[ip] = now
 	if n := g.cfg.DistinctIPs; n > 0 && len(g.ips) > n {
-		g.trip(reasonFanOut, fmt.Sprintf("more than %d hosts in a minute", n))
+		g.trip(reasonFanOut, fmt.Sprintf("more than %d hosts in %.0f s", n, g.cfg.WindowSec))
 	}
 }
 
@@ -581,14 +581,28 @@ func (g *abuseGuard) forget(k pairKey) {
 	}
 }
 
-func (g *abuseGuard) unanswered(now int64, why string) {
-	if g.noAnswer.add(now) {
-		g.trip(reasonHalfOpen, fmt.Sprintf("more than %d connection attempts unanswered in a minute (last %s)", g.cfg.UnansweredSYNs, why))
+// unanswered records that an attempt at k's target was refused or not
+// answered; only distinct targets count.
+func (g *abuseGuard) unanswered(k synKey, now int64, why string) {
+	n := g.cfg.UnansweredTargets
+	if n <= 0 {
+		return
+	}
+	t := pairKey{k.ip, k.port, protoTCP}
+	if _, ok := g.failed[t]; !ok && len(g.failed) >= maxTargets {
+		for old := range g.failed {
+			delete(g.failed, old)
+			break
+		}
+	}
+	g.failed[t] = now
+	if len(g.failed) > n {
+		g.trip(reasonHalfOpen, fmt.Sprintf("connection attempts to more than %d hosts and ports unanswered in %.0f s (last %s %s:%d)", n, g.cfg.WindowSec, why, ipString(k.ip), k.port))
 	}
 }
 
 func (g *abuseGuard) breach(s *streak, reason, format string, limit float64, now int64) {
-	lasted, began := s.hit(now)
+	lasted, began := s.hit(now, g.breachGap)
 	if began && now-s.logged > int64(time.Minute) {
 		s.logged = now
 		log.Printf("abuse limits: dropping "+format, limit)
@@ -619,19 +633,24 @@ func (g *abuseGuard) sweep(now int64) {
 	}
 	g.lastSweep = now
 	for ip, t := range g.ips {
-		if now-t > int64(abuseWindow) {
+		if now-t > g.window {
 			delete(g.ips, ip)
 		}
 	}
 	for k, e := range g.pairs {
-		if now-e.seen > int64(abuseWindow) {
+		if now-e.seen > g.window {
 			g.forget(k)
 		}
 	}
+	for k, t := range g.failed {
+		if now-t > g.window {
+			delete(g.failed, k)
+		}
+	}
 	for k, t := range g.pending {
-		if now-t > int64(synTimeout) {
+		if now-t > g.synTimeout {
 			delete(g.pending, k)
-			g.unanswered(now, "timed out")
+			g.unanswered(k, now, "timed out")
 		}
 	}
 }
@@ -670,7 +689,7 @@ func (g *abuseGuard) in(frame []byte, now time.Time) {
 	}
 	delete(g.pending, k)
 	if p.tcpFlags&tcpRST != 0 {
-		g.unanswered(t, "refused")
+		g.unanswered(k, t, "refused")
 	}
 }
 

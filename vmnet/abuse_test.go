@@ -245,9 +245,10 @@ func TestUDPFloodToManyHosts(t *testing.T) {
 
 func TestUDPFloodToOneHost(t *testing.T) {
 	g := newTestGuard(t, abuseLimits{})
+	start := g.now
 	// 5000 packets a second to one silent host: dropped down to the quiet
-	// rate at once, cut after half a minute of it.
-	for range 40 * 5000 {
+	// rate at once, cut after a minute of it.
+	for range 80 * 5000 {
 		g.send(udpFrame(guestIP, 40000, "198.51.100.30", 80, 60))
 		g.advance(time.Second / 5000)
 		if g.isTripped() {
@@ -255,21 +256,30 @@ func TestUDPFloodToOneHost(t *testing.T) {
 		}
 	}
 	g.wantTripped(reasonSustainedUDP)
-	if g.passed > 33*2000+4000 {
+	if took := g.now.Sub(start); took < 60*time.Second || took > 63*time.Second {
+		t.Errorf("cut after %v, want about 61 s (the burst, then a minute)", took)
+	}
+	if g.passed > 63*2000+4000 {
 		t.Errorf("%d packets passed, more than the quiet rate allows", g.passed)
 	}
 }
 
 func TestUnansweredSYNFlood(t *testing.T) {
 	g := newTestGuard(t, abuseLimits{})
-	// 50 attempts a second at one silent host, under the new-flow rate.
-	for i := range 60 * 50 {
-		if !g.send(tcpFrame(guestIP, uint16(1024+i), "198.51.100.40", 80, tcpSYN)) {
+	// 20 attempts a second at port 80 of ever new hosts, none answering,
+	// under the new-flow rate and the fan-out: cut once 150 have timed out.
+	start := g.now
+	for i := range 120 * 20 {
+		g.send(tcpFrame(guestIP, uint16(1024+i), host(i), 80, tcpSYN))
+		g.advance(50 * time.Millisecond)
+		if g.isTripped() {
 			break
 		}
-		g.advance(20 * time.Millisecond)
 	}
 	g.wantTripped(reasonHalfOpen)
+	if took := g.now.Sub(start); took > 45*time.Second {
+		t.Errorf("cut after %v, want 35 s of timeout and 150 targets", took)
+	}
 	if g.droppedFlows.Load() != 0 {
 		t.Error("a flood under the rate was slowed rather than cut")
 	}
@@ -277,12 +287,130 @@ func TestUnansweredSYNFlood(t *testing.T) {
 
 func TestRefusedSYNFlood(t *testing.T) {
 	g := newTestGuard(t, abuseLimits{})
+	// Ever new hosts, each refusing: cut at the 151st, without waiting.
 	for i := range 1000 {
-		if !g.send(tcpFrame(guestIP, uint16(1024+i), "198.51.100.41", 80, tcpSYN)) {
+		if !g.send(tcpFrame(guestIP, uint16(1024+i), host(i), 80, tcpSYN)) {
 			break
 		}
-		g.receive(tcpFrame("198.51.100.41", 80, guestIP, uint16(1024+i), tcpRST|tcpACK))
+		g.receive(tcpFrame(host(i), 80, guestIP, uint16(1024+i), tcpRST|tcpACK))
 		g.advance(20 * time.Millisecond)
+	}
+	g.wantTripped(reasonHalfOpen)
+	if g.passed != 151 {
+		t.Errorf("%d attempts passed, want 151", g.passed)
+	}
+}
+
+// (a) 50 programs, each retrying one dead server 10 times a second, for a
+// minute: half time out, half are refused. Soft drops (500 attempts a
+// second is over the new-flow rate), but no cut: 50 targets.
+func TestTightRetryLoopsAreNotCut(t *testing.T) {
+	g := newTestGuard(t, abuseLimits{})
+	i := 0
+	for range 60 * 10 {
+		for app := range 50 {
+			dst, sport := host(app), uint16(1024+i%60000)
+			i++
+			if g.send(tcpFrame(guestIP, sport, dst, 8080, tcpSYN)) && app%2 == 0 {
+				g.receive(tcpFrame(dst, 8080, guestIP, sport, tcpRST|tcpACK))
+			}
+		}
+		g.advance(100 * time.Millisecond)
+	}
+	g.advance(40 * time.Second) // the last of them time out
+	if g.isTripped() {
+		t.Fatalf("cut: %+v", g.events)
+	}
+	if n := len(g.failed); n > 50 {
+		t.Errorf("%d unanswered targets counted, want at most 50", n)
+	}
+	if g.droppedFlows.Load() == 0 {
+		t.Error("500 attempts a second were not slowed")
+	}
+}
+
+// The same 50 dead servers retried once a second each, for five minutes:
+// under every rate, nothing dropped and no cut.
+func TestSlowRetryLoopsPass(t *testing.T) {
+	g := newTestGuard(t, abuseLimits{})
+	i := 0
+	for range 5 * 60 {
+		for app := range 50 {
+			g.send(tcpFrame(guestIP, uint16(1024+i%60000), host(app), 8080, tcpSYN))
+			i++
+		}
+		g.advance(time.Second)
+	}
+	g.wantClean()
+}
+
+// (b) The owner's internet goes down for two minutes: every attempt at the
+// 40 hosts the machine was using fails, at once and then every two
+// seconds, some timing out and some refused; QUIC and a public resolver
+// hear nothing back either.
+func TestOutageIsNotCut(t *testing.T) {
+	g := newTestGuard(t, abuseLimits{})
+	i := 0
+	attempt := func(h int) {
+		dst, port, sport := host(h), uint16(443), uint16(1024+i%60000)
+		if h%4 == 0 {
+			port = 80
+		}
+		i++
+		if g.send(tcpFrame(guestIP, sport, dst, port, tcpSYN)) && h%3 == 0 {
+			g.receive(tcpFrame(dst, port, guestIP, sport, tcpRST|tcpACK))
+		}
+	}
+	// Everything reconnects at once.
+	for range 3 {
+		for h := range 40 {
+			attempt(h)
+		}
+	}
+	for range 60 {
+		for h := range 40 {
+			attempt(h)
+			g.send(udpFrame(guestIP, uint16(50000+h), host(h), 443, 1300))
+		}
+		g.send(udpFrame(guestIP, 50100, "1.1.1.1", 53, 80))
+		g.advance(2 * time.Second)
+	}
+	g.advance(40 * time.Second)
+	if g.isTripped() {
+		t.Fatalf("cut: %+v", g.events)
+	}
+	if n := len(g.failed); n > 40 {
+		t.Errorf("%d unanswered targets counted, want at most 40", n)
+	}
+	// The reconnect storm at the start may overrun the burst by a frame
+	// or two; that costs a retry, nothing more.
+	if n := g.droppedFlows.Load(); n > 10 {
+		t.Errorf("%d attempts dropped", n)
+	}
+}
+
+// (c) Attempts at 300 distinct hosts and ports in a minute (100 hosts,
+// three ports each), none answered: cut once enough have timed out.
+func TestUnansweredTargetsAreCut(t *testing.T) {
+	g := newTestGuard(t, abuseLimits{})
+	for i := range 300 {
+		g.send(tcpFrame(guestIP, uint16(1024+i), host(i/3), uint16(8000+i%3), tcpSYN))
+		g.advance(200 * time.Millisecond)
+	}
+	g.advance(40 * time.Second)
+	g.wantTripped(reasonHalfOpen)
+}
+
+// The same, refused rather than silent: cut at once.
+func TestRefusedTargetsAreCut(t *testing.T) {
+	g := newTestGuard(t, abuseLimits{})
+	for i := range 300 {
+		dst, port, sport := host(i/3), uint16(8000+i%3), uint16(1024+i)
+		if !g.send(tcpFrame(guestIP, sport, dst, port, tcpSYN)) {
+			break
+		}
+		g.receive(tcpFrame(dst, port, guestIP, sport, tcpRST|tcpACK))
+		g.advance(200 * time.Millisecond)
 	}
 	g.wantTripped(reasonHalfOpen)
 }
@@ -290,8 +418,9 @@ func TestRefusedSYNFlood(t *testing.T) {
 func TestSustainedNewFlows(t *testing.T) {
 	g := newTestGuard(t, abuseLimits{})
 	start := g.now
-	// 200 answered connections a second to five hosts, without pause.
-	for i := range 40 * 200 {
+	// 200 answered connections a second to five hosts, without pause: a
+	// load test. Cut after a minute.
+	for i := range 80 * 200 {
 		sport := uint16(1024 + i%60000)
 		if g.send(tcpFrame(guestIP, sport, host(i%5), 443, tcpSYN)) {
 			g.receive(tcpFrame(host(i%5), 443, guestIP, sport, tcpSYN|tcpACK))
@@ -302,8 +431,34 @@ func TestSustainedNewFlows(t *testing.T) {
 		}
 	}
 	g.wantTripped(reasonSustainedNew)
-	if took := g.now.Sub(start); took < 30*time.Second || took > 35*time.Second {
-		t.Errorf("cut after %v, want about 30 s", took)
+	if took := g.now.Sub(start); took < 60*time.Second || took > 63*time.Second {
+		t.Errorf("cut after %v, want about 61 s (the burst, then a minute)", took)
+	}
+}
+
+// 50 s without pause over the new-flow rate, then a pause: not cut.
+func TestLongBurstUnderAMinuteIsNotCut(t *testing.T) {
+	g := newTestGuard(t, abuseLimits{})
+	for i := range 50 * 200 {
+		sport := uint16(1024 + i)
+		if g.send(tcpFrame(guestIP, sport, host(i%5), 443, tcpSYN)) {
+			g.receive(tcpFrame(host(i%5), 443, guestIP, sport, tcpSYN|tcpACK))
+		}
+		g.advance(5 * time.Millisecond)
+	}
+	g.advance(5 * time.Second)
+	for i := range 50 * 200 {
+		sport := uint16(20000 + i)
+		if g.send(tcpFrame(guestIP, sport, host(i%5), 443, tcpSYN)) {
+			g.receive(tcpFrame(host(i%5), 443, guestIP, sport, tcpSYN|tcpACK))
+		}
+		g.advance(5 * time.Millisecond)
+	}
+	if g.isTripped() {
+		t.Fatalf("cut: %+v", g.events)
+	}
+	if g.droppedFlows.Load() == 0 {
+		t.Error("not slowed")
 	}
 }
 
@@ -458,7 +613,7 @@ func TestTablesStayBounded(t *testing.T) {
 	// The patterns off, so nothing stops the flood: only the caps hold.
 	g := newTestGuard(t, abuseLimits{
 		NewFlowsPerSec: 1e9, NewFlowsBurst: 1e9, UDPPerSec: 1e9, UDPBurst: 1e9, UDPAllPerSec: 1e9, UDPAllBurst: 1e9,
-		DistinctIPs: -1, PortsPerIP: -1, UnansweredSYNs: -1, SustainedSec: -1,
+		DistinctIPs: -1, PortsPerIP: -1, UnansweredTargets: -1, SustainedSec: -1,
 	})
 	for i := range 200_000 {
 		g.send(udpFrame(guestIP, 40000, host(i), uint16(i), 60))
@@ -466,9 +621,9 @@ func TestTablesStayBounded(t *testing.T) {
 		g.advance(time.Microsecond)
 	}
 	g.mu.Lock()
-	ips, pairs, ports, pending := len(g.ips), len(g.pairs), len(g.portsOf), len(g.pending)
+	ips, pairs, ports, pending, failed := len(g.ips), len(g.pairs), len(g.portsOf), len(g.pending), len(g.failed)
 	g.mu.Unlock()
-	if ips > maxIPs || pairs > maxPairs || ports > maxPairs || pending > maxPending {
+	if ips > maxIPs || pairs > maxPairs || ports > maxPairs || pending > maxPending || failed > maxTargets {
 		t.Errorf("tables grew: %d hosts, %d flows, %d port counts, %d attempts", ips, pairs, ports, pending)
 	}
 	if g.isTripped() {
@@ -478,7 +633,7 @@ func TestTablesStayBounded(t *testing.T) {
 	g.advance(2 * time.Minute)
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if len(g.ips)+len(g.pairs)+len(g.portsOf)+len(g.pending) != 0 {
+	if len(g.ips)+len(g.pairs)+len(g.portsOf)+len(g.pending)+len(g.failed) != 0 {
 		t.Errorf("left after the window: %d %d %d %d", len(g.ips), len(g.pairs), len(g.portsOf), len(g.pending))
 	}
 }
@@ -501,7 +656,7 @@ func TestTablesBoundedWithDefaults(t *testing.T) {
 
 func TestAbuseLimitsFromFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bandwidth.json")
-	os.WriteFile(path, []byte(`{"up_mbps":16,"down_mbps":0,"abuse":{"ports_per_ip_per_min":20,"distinct_ips_per_min":-1,"new_flows_per_sec":5}}`), 0o600)
+	os.WriteFile(path, []byte(`{"up_mbps":16,"down_mbps":0,"abuse":{"ports_per_ip":20,"distinct_ips":-1,"new_flows_per_sec":5,"window_sec":30,"syn_timeout_sec":10,"sustained_sec":90,"unanswered_targets":40}}`), 0o600)
 	guard := newAbuseGuard(netip.MustParseAddr(gatewayIP).As4(), nil)
 	var up, down bucket
 	ctx, cancel := contextWithCancel()
@@ -513,8 +668,15 @@ func TestAbuseLimitsFromFile(t *testing.T) {
 		cfg := guard.cfg
 		guard.mu.Unlock()
 		if cfg.PortsPerIP == 20 {
-			if cfg.DistinctIPs != 0 || cfg.NewFlowsPerSec != 5 || cfg.NewFlowsBurst != defaultAbuse.NewFlowsBurst || cfg.UnansweredSYNs != defaultAbuse.UnansweredSYNs {
+			if cfg.DistinctIPs != 0 || cfg.NewFlowsPerSec != 5 || cfg.NewFlowsBurst != defaultAbuse.NewFlowsBurst ||
+				cfg.UnansweredTargets != 40 || cfg.SustainedSec != 90 || cfg.AnsweredSec != defaultAbuse.AnsweredSec {
 				t.Errorf("limits %+v", cfg)
+			}
+			guard.mu.Lock()
+			w, st := guard.window, guard.synTimeout
+			guard.mu.Unlock()
+			if w != int64(30*time.Second) || st != int64(10*time.Second) {
+				t.Errorf("window %v, SYN timeout %v", time.Duration(w), time.Duration(st))
 			}
 			break
 		}
@@ -534,6 +696,10 @@ func TestAbuseLimitsDefaultsAndOff(t *testing.T) {
 	if e := (abuseLimits{DistinctIPs: 1 << 30}).effective(); e.DistinctIPs >= maxIPs {
 		t.Errorf("a threshold above the table size: %d", e.DistinctIPs)
 	}
+	// Durations cannot be turned off, and stay in range.
+	if e := (abuseLimits{WindowSec: -1, SYNTimeoutSec: 1e9}).effective(); e.WindowSec != 60 || e.SYNTimeoutSec != 300 {
+		t.Errorf("durations %+v", e)
+	}
 	g := newTestGuard(t, abuseLimits{Off: true})
 	for p := range 500 {
 		if !g.send(tcpFrame(guestIP, uint16(20000+p), "198.51.100.20", uint16(1+p), tcpSYN)) {
@@ -541,6 +707,30 @@ func TestAbuseLimitsDefaultsAndOff(t *testing.T) {
 		}
 	}
 	g.wantClean()
+}
+
+// The windows and counts from the file apply: a shorter SYN timeout and a
+// lower count cut sooner, and a shorter window forgets sooner.
+func TestConfiguredWindows(t *testing.T) {
+	g := newTestGuard(t, abuseLimits{UnansweredTargets: 20, SYNTimeoutSec: 5, WindowSec: 10})
+	for i := range 15 {
+		g.send(tcpFrame(guestIP, uint16(1024+i), host(i), 80, tcpSYN))
+	}
+	for range 20 { // timed out after 5 s, forgotten 10 s later
+		g.advance(time.Second)
+	}
+	for i := range 15 {
+		g.send(tcpFrame(guestIP, uint16(2048+i), host(100+i), 80, tcpSYN))
+	}
+	g.advance(6 * time.Second)
+	if g.isTripped() {
+		t.Fatalf("15 and 15 in separate windows cut: %+v", g.events)
+	}
+	for i := range 10 {
+		g.send(tcpFrame(guestIP, uint16(4096+i), host(200+i), 80, tcpSYN))
+	}
+	g.advance(6 * time.Second)
+	g.wantTripped(reasonHalfOpen)
 }
 
 func TestParseIgnoresOtherFrames(t *testing.T) {
