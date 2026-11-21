@@ -169,7 +169,7 @@ func TestUploadBeyondRequest(t *testing.T) {
 	client, server := pair(t)
 	done := serve(server, leasetoken.TestLimits{MaxDownBytes: 0, MaxUpBytes: 1000, MaxSeconds: 5})
 	r := raw{t, client}
-	go r.send(frame(FrameDown, 0), frame(FrameUp, 100), data(60), data(60))
+	go r.send(frame(FrameDown, 0, 0), frame(FrameUp, 100), data(60), data(60))
 	wantRefusal(t, "upload beyond its request", r.until(), CodeOverLimit)
 	if s := <-done; s.rep.UpReceived != 120 || s.rep.Complete {
 		t.Errorf("server: %+v, %v", s.rep, s.err)
@@ -181,15 +181,19 @@ func TestMalformedFrames(t *testing.T) {
 	ping := frame(FramePing, 0, 0)
 	for name, frames := range map[string][][]byte{
 		"unknown type":        {{0x55}},
-		"empty DATA":          {ping, frame(FrameDown, 0), frame(FrameUp, 10), {FrameData, 0, 0}},
-		"oversized DATA":      {ping, frame(FrameDown, 0), frame(FrameUp, 10), {FrameData, 0x50, 0}},
-		"DOWN before pings":   {frame(FrameDown, 10)},
+		"empty DATA":          {ping, frame(FrameDown, 0, 0), frame(FrameUp, 10), {FrameData, 0, 0}},
+		"oversized DATA":      {ping, frame(FrameDown, 0, 0), frame(FrameUp, 10), {FrameData, 0x50, 0}},
+		"DOWN before pings":   {frame(FrameDown, 10, 0)},
 		"UP before DOWN":      {ping, frame(FrameUp, 10)},
 		"BYE first":           {{FrameBye}},
 		"DATA during pings":   {data(10)},
 		"server frame":        {ping, {FramePong, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
-		"second DOWN":         {ping, frame(FrameDown, 0), frame(FrameDown, 0)},
-		"BYE before UPRESULT": {ping, frame(FrameDown, 0), frame(FrameUp, 10), {FrameBye}},
+		"second DOWN":         {ping, frame(FrameDown, 0, 0), frame(FrameDown, 0, 0)},
+		"BYE before UPRESULT": {ping, frame(FrameDown, 0, 0), frame(FrameUp, 10), {FrameBye}},
+		"ACK during pings":    {ping, frame(FrameAck, 0)},
+		"ACK beyond sent":     {ping, frame(FrameDown, 0, 0), frame(FrameAck, 5)},
+		"ACK during upload":   {ping, frame(FrameDown, 0, 0), frame(FrameUp, 10), frame(FrameAck, 0)},
+		"UP before final ACK": {ping, frame(FrameDown, 1000, 0), frame(FrameUp, 10)},
 	} {
 		client, server := pair(t)
 		done := serve(server, lim)
@@ -237,7 +241,7 @@ func TestDeadline(t *testing.T) {
 	client, server = pair(t)
 	start = time.Now()
 	done = serve(server, leasetoken.TestLimits{MaxDownBytes: 10_000_000, MaxSeconds: 1})
-	client.Write(frame(FrameDown, 10_000_000))
+	client.Write(frame(FrameDown, 10_000_000, 0))
 	if s := <-done; s.err == nil || time.Since(start) > 2*time.Second {
 		t.Errorf("unread download: %v after %s", s.err, time.Since(start))
 	}

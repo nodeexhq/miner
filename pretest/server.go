@@ -1,11 +1,9 @@
 package pretest
 
 import (
-	"bufio"
 	crand "crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -16,7 +14,9 @@ import (
 
 // Report is the server's account of one test.
 type Report struct {
-	Pings       int
+	Pings int
+	// MinRTT is what the client said in DOWN.
+	MinRTT      time.Duration
 	DownSent    int64
 	DownElapsed time.Duration
 	UpReceived  int64
@@ -32,43 +32,48 @@ type Report struct {
 // Moved is what the test is charged against the node's test budget.
 func (r Report) Moved() int64 { return r.BytesIn + r.BytesOut }
 
+// lingerDrain is how long a refused client's remaining bytes are taken.
+const lingerDrain = 500 * time.Millisecond
+
 // Serve runs the Miner's side of a test on conn, which has just been sent
-// the gate's OK at started, within lim (already clamped to the Miner's
-// maxima). It always closes conn. The error says why a test that did not
-// end in BYE stopped.
+// the gate's OK at started, within lim (clamped to the Miner's maxima). It
+// always closes conn. The error says why a test that did not end in BYE
+// stopped.
 func Serve(conn net.Conn, lim leasetoken.TestLimits, started time.Time) (Report, error) {
 	defer conn.Close()
 	lim = lim.Clamp()
 	conn.SetDeadline(started.Add(time.Duration(lim.MaxSeconds) * time.Second))
 	s := &server{conn: conn, cnt: &counter{rw: conn}, lim: lim}
-	s.r = bufio.NewReaderSize(s.cnt, 32<<10)
+	s.fr = startReader(s.cnt)
 	err := s.run()
-	s.rep.BytesIn, s.rep.BytesOut = s.cnt.in, s.cnt.out
-	if err == nil {
-		return s.rep, nil
-	}
 	var pe *Error
 	switch {
+	case err == nil:
+		conn.SetReadDeadline(time.Now())
 	case errors.As(err, &pe):
-		// Refused by us (sent below) or by the client (nothing to send).
-		if !pe.sent {
-			break
+		// Refused by us (sent here) or by the client (nothing to send).
+		if pe.sent {
+			s.sendErr(pe.Code, pe.Reason)
+		} else {
+			conn.SetReadDeadline(time.Now())
 		}
-		s.sendErr(pe.Code, pe.Reason)
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		s.sendErr(CodeDeadline, "deadline")
 		err = fmt.Errorf("pretest: deadline of %ds reached: %w", lim.MaxSeconds, err)
 	case errors.Is(err, ErrProtocol):
 		s.sendErr(CodeProtocol, "protocol")
+	default:
+		conn.SetReadDeadline(time.Now())
 	}
-	s.rep.BytesIn, s.rep.BytesOut = s.cnt.in, s.cnt.out
+	s.fr.stop()
+	s.rep.BytesIn, s.rep.BytesOut = s.cnt.in.Load(), s.cnt.out.Load()
 	return s.rep, err
 }
 
 type server struct {
 	conn net.Conn
 	cnt  *counter
-	r    *bufio.Reader
+	fr   *frameReader
 	lim  leasetoken.TestLimits
 	rep  Report
 	// midFrame is set while a frame is partly written; an ERR then would
@@ -90,108 +95,127 @@ func (s *server) write(b []byte) error {
 	return err
 }
 
+// sendErr sends ERR, then says it is done writing and takes what the client
+// still sends for a moment: closing with the client's bytes unread would
+// reset the connection, which can discard the ERR before it is read.
 func (s *server) sendErr(code byte, reason string) {
+	s.conn.SetReadDeadline(time.Now().Add(lingerDrain))
 	if s.midFrame {
 		return
 	}
-	// The test's own deadline may have passed: give the ERR a moment of
-	// its own.
+	// The test's own deadline may have passed: give the ERR a moment.
 	s.conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
 	if _, err := s.cnt.Write(errFrame(code, reason)); err != nil {
 		return
 	}
-	// Closing with the client's bytes still unread would reset the
-	// connection, which can discard the ERR before the client reads it.
-	// Say we are done, and take what the client is still sending for a
-	// moment.
-	if cw, ok := s.conn.(interface{ CloseWrite() error }); ok && cw.CloseWrite() == nil {
-		s.conn.SetReadDeadline(time.Now().Add(lingerDrain))
-		io.Copy(io.Discard, s.r)
+	if cw, ok := s.conn.(interface{ CloseWrite() error }); ok {
+		cw.CloseWrite()
 	}
 }
 
-// lingerDrain is how long a refused client's remaining bytes are taken.
-const lingerDrain = 500 * time.Millisecond
+// next is the client's next frame, or the error that ended reading.
+func (s *server) next() (inFrame, error) {
+	f := <-s.fr.ch
+	return f, f.err
+}
 
-// next reads a frame and requires it to be one of want.
-func (s *server) next(buf []byte, want ...byte) (byte, []byte, error) {
-	t, body, err := readFrame(s.r, buf)
-	if err != nil {
-		return t, nil, err
-	}
-	for _, w := range want {
-		if t == w {
-			return t, body, nil
-		}
-	}
-	return t, nil, fmt.Errorf("%w: frame 0x%02x out of order", ErrProtocol, t)
+func outOfOrder(t byte, phase string) error {
+	return fmt.Errorf("%w: frame 0x%02x during %s", ErrProtocol, t, phase)
 }
 
 func (s *server) run() error {
-	buf := make([]byte, MaxData)
-
 	// P: 1 to lim.Pings round trips (none when the limit is 0), then DOWN.
-	var down uint64
+	var f inFrame
+	var err error
 	for {
-		t, body, err := s.next(buf, FramePing, FrameDown)
-		if err != nil {
+		if f, err = s.next(); err != nil {
 			return err
 		}
-		if t == FramePing && s.rep.Pings >= s.lim.Pings {
-			return refuse(CodeOverLimit, "more than %d pings", s.lim.Pings)
-		}
-		if t == FrameDown {
-			if s.rep.Pings < min(1, s.lim.Pings) {
-				return fmt.Errorf("%w: DOWN before any PING", ErrProtocol)
-			}
-			down = u32(body)
+		if f.t == FrameDown {
 			break
 		}
+		if f.t != FramePing {
+			return outOfOrder(f.t, "ping")
+		}
+		if s.rep.Pings >= s.lim.Pings {
+			return refuse(CodeOverLimit, "more than %d pings", s.lim.Pings)
+		}
 		s.rep.Pings++
-		pong := append([]byte{FramePong}, body...)
-		if err := s.write(pong); err != nil {
+		if err := s.write(append([]byte{FramePong}, f.body...)); err != nil {
 			return err
 		}
+	}
+	if s.rep.Pings < min(1, s.lim.Pings) {
+		return fmt.Errorf("%w: DOWN before any PING", ErrProtocol)
 	}
 
 	// D.
-	if down > uint64(s.lim.MaxDownBytes) {
+	down := int64(u32(f.body[:4]))
+	s.rep.MinRTT = time.Duration(u32(f.body[4:])) * time.Microsecond
+	if down > s.lim.MaxDownBytes {
 		return refuse(CodeOverLimit, "download of %d bytes, limit %d", down, s.lim.MaxDownBytes)
 	}
-	if err := s.download(int64(down)); err != nil {
+	fl := &flow{rtt: s.rep.MinRTT}
+	if err := s.download(down, fl, f.at); err != nil {
 		return err
+	}
+	// ACKs up to the client's final one, then UP.
+	for {
+		if f, err = s.next(); err != nil {
+			return err
+		}
+		if f.t != FrameAck {
+			break
+		}
+		if err := fl.ack(int64(u64(f.body)), f.at); err != nil {
+			return err
+		}
+	}
+	if f.t != FrameUp {
+		return outOfOrder(f.t, "the end of the download")
+	}
+	if fl.acked != fl.sent {
+		return fmt.Errorf("%w: UP with %d of %d download bytes acknowledged", ErrProtocol, fl.acked, fl.sent)
 	}
 
 	// U.
-	_, body, err := s.next(buf, FrameUp)
-	if err != nil {
-		return err
-	}
-	up := int64(u32(body))
+	up := int64(u32(f.body))
 	if up > s.lim.MaxUpBytes {
 		return refuse(CodeOverLimit, "upload of %d bytes, limit %d", up, s.lim.MaxUpBytes)
 	}
+	var ack acker
 	var t0 time.Time
 	var first int64
 	for {
-		t, body, err := s.next(buf, FrameData, FrameEnd)
-		if err != nil {
+		if f, err = s.next(); err != nil {
 			return err
 		}
-		if t == FrameEnd {
+		if f.t == FrameEnd {
 			break
 		}
-		if t0.IsZero() {
-			t0, first = time.Now(), int64(len(body))
+		if f.t != FrameData {
+			return outOfOrder(f.t, "upload")
 		}
-		s.rep.UpReceived += int64(len(body))
-		if s.rep.UpReceived > up {
+		if t0.IsZero() {
+			t0, first = f.at, int64(f.n)
+		}
+		due := ack.data(f.n)
+		s.rep.UpReceived = ack.received
+		if ack.received > up {
 			return refuse(CodeOverLimit, "upload exceeds the %d bytes requested", up)
+		}
+		if due {
+			if err := s.write(ack.frame()); err != nil {
+				return err
+			}
 		}
 	}
 	if !t0.IsZero() {
-		s.rep.UpElapsed = time.Since(t0)
-		s.rep.UpCounted = s.rep.UpReceived - first
+		s.rep.UpElapsed = f.at.Sub(t0)
+		s.rep.UpCounted = ack.received - first
+	}
+	if err := s.write(ack.frame()); err != nil {
+		return err
 	}
 	res := frame(FrameUpResult, uint64(s.rep.UpReceived), uint64(s.rep.UpCounted), uint64(s.rep.UpElapsed.Microseconds()))
 	if err := s.write(res); err != nil {
@@ -199,8 +223,11 @@ func (s *server) run() error {
 	}
 
 	// B.
-	if _, _, err := s.next(buf, FrameBye); err != nil {
+	if f, err = s.next(); err != nil {
 		return err
+	}
+	if f.t != FrameBye {
+		return outOfOrder(f.t, "bye")
 	}
 	if err := s.write([]byte{FrameBye}); err != nil {
 		return err
@@ -209,23 +236,59 @@ func (s *server) run() error {
 	return nil
 }
 
-// download streams n random bytes, or as many as DownWindow allows.
-func (s *server) download(n int64) error {
+// download streams n random bytes under flow control until they are sent
+// or DownWindow has passed since DOWN arrived at start, then sends DONE.
+func (s *server) download(n int64, fl *flow, start time.Time) error {
 	var seed [32]byte
 	crand.Read(seed[:])
 	src := rand.NewChaCha8(seed)
 	out := make([]byte, 3+MaxData)
 	out[0] = FrameData
-	start := time.Now()
-	for s.rep.DownSent < n && time.Since(start) < DownWindow {
-		size := int(min(n-s.rep.DownSent, MaxData))
+	window := time.NewTimer(time.Until(start.Add(DownWindow)))
+	defer window.Stop()
+	handle := func(f inFrame) error {
+		if f.err != nil {
+			return f.err
+		}
+		if f.t != FrameAck {
+			return outOfOrder(f.t, "download")
+		}
+		return fl.ack(int64(u64(f.body)), f.at)
+	}
+stream:
+	for fl.sent < n && time.Since(start) < DownWindow {
+		// Take the ACKs that have arrived, and wait for more while the
+		// window is full.
+		for {
+			var f inFrame
+			if fl.open() {
+				select {
+				case f = <-s.fr.ch:
+				default:
+				}
+				if f.at.IsZero() && f.err == nil {
+					break
+				}
+			} else {
+				select {
+				case f = <-s.fr.ch:
+				case <-window.C:
+					break stream
+				}
+			}
+			if err := handle(f); err != nil {
+				return err
+			}
+		}
+		size := int(min(n-fl.sent, MaxData))
 		out[1], out[2] = byte(size>>8), byte(size)
 		src.Read(out[3 : 3+size])
 		if err := s.write(out[:3+size]); err != nil {
 			return err
 		}
-		s.rep.DownSent += int64(size)
+		fl.wrote(size, time.Now())
 	}
+	s.rep.DownSent = fl.sent
 	s.rep.DownElapsed = time.Since(start)
-	return s.write(frame(FrameDone, uint64(s.rep.DownSent), uint64(s.rep.DownElapsed.Microseconds())))
+	return s.write(frame(FrameDone, uint64(fl.sent), uint64(s.rep.DownElapsed.Microseconds())))
 }

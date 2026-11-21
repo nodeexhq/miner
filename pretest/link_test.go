@@ -4,49 +4,69 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nodeexhq/miner/leasetoken"
 )
 
-// shaped forwards src to dst as a line would: each chunk arrives oneWay
-// after it was sent, at most bps bits a second (0: unlimited), with a
-// bounded amount in flight as a real path's buffers would hold.
+// shaped carries src to dst as one direction of a line does: a bottleneck
+// that sends bps bits a second (0: as fast as it comes) out of a bounded
+// queue, and then oneWay of propagation delay. When the queue is full the
+// proxy stops reading, so the sender's own socket buffers fill, as they
+// would behind a real bottleneck. The sockets keep the OS's default
+// buffers.
 func shaped(src, dst net.Conn, oneWay time.Duration, bps float64) {
 	type chunk struct {
-		at time.Time
+		at time.Time // when it left the bottleneck
 		b  []byte
 	}
-	q := make(chan chunk, 16) // ≤ 256 KB in flight, on top of the sockets
-	go func() {
-		defer close(q)
+	// A router queue of about 100 ms at the line's rate, at least 64 KB.
+	queueMax := max(int64(bps/8*0.1), 64<<10)
+	var queued atomic.Int64
+	queue := make(chan []byte, 1<<14)
+	wire := make(chan chunk, 1<<14)
+
+	go func() { // into the queue
+		defer close(queue)
 		for {
+			for queued.Load() >= queueMax {
+				time.Sleep(200 * time.Microsecond)
+			}
 			b := make([]byte, 16<<10)
 			n, err := src.Read(b)
 			if n > 0 {
-				q <- chunk{time.Now(), b[:n]}
+				queued.Add(int64(n))
+				queue <- b[:n]
 			}
 			if err != nil {
 				return
 			}
 		}
 	}()
-	var free time.Time // when the line is next free to carry a byte
-	for c := range q {
-		time.Sleep(time.Until(c.at.Add(oneWay)))
-		if bps > 0 {
-			if now := time.Now(); free.Before(now) {
-				free = now
+	go func() { // the bottleneck
+		defer close(wire)
+		var free time.Time // when the line can next start a byte
+		for b := range queue {
+			if bps > 0 {
+				if now := time.Now(); free.Before(now) {
+					free = now
+				}
+				free = free.Add(time.Duration(float64(len(b)) * 8 / bps * float64(time.Second)))
+				time.Sleep(time.Until(free))
 			}
-			free = free.Add(time.Duration(float64(len(c.b)) * 8 / bps * float64(time.Second)))
-			time.Sleep(time.Until(free))
+			queued.Add(-int64(len(b)))
+			wire <- chunk{time.Now(), b}
 		}
+	}()
+	for c := range wire { // the far end
+		time.Sleep(time.Until(c.at.Add(oneWay)))
 		if _, err := dst.Write(c.b); err != nil {
 			break
 		}
 	}
-	io.Copy(io.Discard, src)
+	go io.Copy(io.Discard, src)
 	if tc, ok := dst.(*net.TCPConn); ok {
 		tc.CloseWrite()
 	}
@@ -62,18 +82,21 @@ func link(t *testing.T, rtt time.Duration, downBps, upBps float64) (client, serv
 	return client, server
 }
 
-// Over a line with a real round trip the test ends inside the Miner's
-// deadline, with what it managed to measure. (At 300 ms, or on a slow line
-// whose buffers hold seconds of data, the fixed windows alone leave too
-// little of the 10 seconds; see PingWindow.)
-func TestSlowLongLink(t *testing.T) {
+// Over lines from fast and near to slow and far, the whole test ends
+// inside the Miner's 10 s, with figures that match the line.
+func TestShapedLinks(t *testing.T) {
 	for _, c := range []struct {
 		name     string
 		rtt      time.Duration
-		down, up float64
+		down, up float64 // bits a second; 0 for no limit
 	}{
-		{"150ms", 150 * time.Millisecond, 0, 0},
-		{"50ms, 50/20 Mbit/s", 50 * time.Millisecond, 50e6, 20e6},
+		{"300ms", 300 * time.Millisecond, 0, 0},
+		{"300ms 4/2", 300 * time.Millisecond, 4e6, 2e6},
+		{"150ms 4/2", 150 * time.Millisecond, 4e6, 2e6},
+		{"150ms 20/10", 150 * time.Millisecond, 20e6, 10e6},
+		{"100ms 10/5", 100 * time.Millisecond, 10e6, 5e6},
+		{"50ms 50/20", 50 * time.Millisecond, 50e6, 20e6},
+		{"10ms 200/100", 10 * time.Millisecond, 200e6, 100e6},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -84,28 +107,31 @@ func TestSlowLongLink(t *testing.T) {
 			res, err := Run(context.Background(), client, OptionsFor(lim))
 			took := time.Since(start)
 			s := <-done
+			t.Logf("%6s: %2d pings, rtt min %s, down %6.2f Mbit/s (%8d B), up %6.2f Mbit/s (%8d B)",
+				took.Round(10*time.Millisecond), len(res.RTTs), res.RTTMin().Round(time.Millisecond),
+				res.DownMbps(), res.DownReceived, res.UpMbps(), res.UpReceived)
 			if err != nil || s.err != nil || !s.rep.Complete {
 				t.Fatalf("after %s: client %v, server %v", took, err, s.err)
 			}
-			if took > 10*time.Second {
-				t.Errorf("took %s", took)
+			if took > 9500*time.Millisecond {
+				t.Errorf("took %s, too close to the 10 s deadline", took)
 			}
 			if n := len(res.RTTs); n < 1 || n > lim.Pings {
 				t.Errorf("%d pings", n)
 			}
-			if m := res.RTTMin(); m < c.rtt || m > c.rtt+100*time.Millisecond {
-				t.Errorf("RTT min %s over a %s link", m, c.rtt)
+			if m := res.RTTMin(); m < c.rtt || m > c.rtt+30*time.Millisecond {
+				t.Errorf("RTT min %s over a %s line", m, c.rtt)
 			}
-			within := func(name string, got, want float64) {
-				if want > 0 && (got < want*0.5 || got > want*1.3) {
-					t.Errorf("%s %.2f Mbit/s over a %.2f Mbit/s link", name, got/1e6, want/1e6)
+			sane := func(name string, got, line float64) {
+				switch {
+				case got <= 0:
+					t.Errorf("%s: nothing measured", name)
+				case line > 0 && (got < line*0.6 || got > line*1.15):
+					t.Errorf("%s %.2f Mbit/s over a %.2f Mbit/s line", name, got/1e6, line/1e6)
 				}
 			}
-			within("down", res.DownMbps()*1e6, c.down)
-			within("up", res.UpMbps()*1e6, c.up)
-			t.Logf("%s: %d pings, rtt %s, down %.2f Mbit/s (%d B), up %.2f Mbit/s (%d B)",
-				took.Round(time.Millisecond), len(res.RTTs), res.RTTMedian().Round(time.Millisecond),
-				res.DownMbps(), res.DownReceived, res.UpMbps(), res.UpReceived)
+			sane("down", res.DownMbps()*1e6, c.down)
+			sane("up", res.UpMbps()*1e6, c.up)
 		})
 	}
 }
