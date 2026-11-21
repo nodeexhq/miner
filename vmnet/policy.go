@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"log"
 	"net"
 	"net/netip"
 	"slices"
@@ -94,8 +95,9 @@ func allowed(frame []byte, guestNet netip.Prefix, home []netip.Addr) bool {
 }
 
 // filteredConn drops the frames the policy refuses before the virtual
-// network sees them. Frames going to the machine are not examined: they are
-// replies to what it was allowed to send.
+// network sees them. Frames going to the machine are not filtered: they are
+// replies to what it was allowed to send (the abuse watch only looks at
+// them, to see which connection attempts were answered).
 type filteredConn struct {
 	net.Conn
 	guestNet netip.Prefix
@@ -109,6 +111,36 @@ type filteredConn struct {
 	dropped  atomic.Uint64
 	// Frames dropped (out) or made to wait (in) by the bandwidth limits.
 	limitedUp, limitedDown atomic.Uint64
+	// abuse watches for scanning and floods (abuse.go); once it trips,
+	// every frame is dropped both ways, as when held, for good. Nil is no
+	// watch.
+	abuse *abuseGuard
+}
+
+// cut reports whether every frame is dropped: the lease is not confirmed,
+// or the machine was caught abusing the owner's address.
+func (c *filteredConn) cut() bool { return c.held.Load() || c.abuse.isTripped() }
+
+// leaseHold applies the app's hold (SIGUSR1) or release (SIGUSR2), for
+// lease reasons, and reports whether that changed anything.
+//
+// A cut for abuse is deliberately not part of held: it is sticky, and a
+// release does not undo it. The app releases the network whenever the
+// lease is confirmed again (after a pause, a restart of the core, a late
+// renewal), which says nothing about what the machine did; letting that
+// reopen the network would hand it straight back to whoever was scanning
+// from it. Only a new helper, which comes with a new machine, starts
+// clean. Ending the lease and telling the platform is the app's to do,
+// from the event on standard output.
+func (c *filteredConn) leaseHold(held bool) bool {
+	changed := c.held.Swap(held) != held
+	if changed {
+		log.Printf("network held: %v", held)
+	}
+	if !held && c.abuse.isTripped() {
+		log.Printf("network stays cut for abuse: a release does not lift it")
+	}
+	return changed
 }
 
 func (c *filteredConn) Read(b []byte) (int, error) {
@@ -117,11 +149,14 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		if c.held.Load() {
+		if c.cut() {
 			continue
 		}
 		if !allowed(b[:n], c.guestNet, c.home.list()) {
 			c.dropped.Add(1)
+			continue
+		}
+		if !c.abuse.out(b[:n], time.Now()) {
 			continue
 		}
 		if metered(b[:n], true, c.gateway) {
@@ -138,9 +173,10 @@ func (c *filteredConn) Read(b []byte) (int, error) {
 
 // Write carries a frame to the machine, when the limit has room for it.
 func (c *filteredConn) Write(b []byte) (int, error) {
-	if c.held.Load() {
+	if c.cut() {
 		return len(b), nil
 	}
+	c.abuse.in(b, time.Now())
 	if metered(b, false, c.gateway) {
 		if d := c.down.delay(len(b), time.Now()); d > 0 {
 			c.limitedDown.Add(1)

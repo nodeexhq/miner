@@ -142,7 +142,7 @@ func TestWatchLimits(t *testing.T) {
 	var up, down bucket
 	ctx, cancel := contextWithCancel()
 	defer cancel()
-	go watchLimits(ctx, path, &up, &down)
+	go watchLimits(ctx, path, &up, &down, nil)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		up.mu.Lock()

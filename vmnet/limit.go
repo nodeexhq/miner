@@ -153,11 +153,14 @@ func metered(frame []byte, out bool, gateway netip.Addr) bool {
 type limits struct {
 	UpMbps   float64 `json:"up_mbps"`
 	DownMbps float64 `json:"down_mbps"`
+	// Optional: the abuse thresholds (abuse.go); absent is the defaults.
+	Abuse abuseLimits `json:"abuse"`
 }
 
 // watchLimits applies the limits the app writes to path, reading it every
-// few seconds; no file means no limit.
-func watchLimits(ctx context.Context, path string, up, down *bucket) {
+// few seconds; no file means no bandwidth limit and the default abuse
+// thresholds. guard may be nil.
+func watchLimits(ctx context.Context, path string, up, down *bucket, guard *abuseGuard) {
 	var last *limits
 	for {
 		var l limits
@@ -169,6 +172,12 @@ func watchLimits(ctx context.Context, path string, up, down *bucket) {
 		if last == nil || l != *last {
 			up.set(l.UpMbps)
 			down.set(l.DownMbps)
+			if guard != nil && (last == nil || l.Abuse != last.Abuse) {
+				guard.set(l.Abuse)
+				if l.Abuse != (abuseLimits{}) {
+					log.Printf("abuse limits: %+v", l.Abuse.effective())
+				}
+			}
 			if l.UpMbps > 0 || l.DownMbps > 0 {
 				log.Printf("machine bandwidth: up to %.1f Mbit/s out, %.1f Mbit/s in (0 is no limit)", l.UpMbps, l.DownMbps)
 			} else if last != nil {

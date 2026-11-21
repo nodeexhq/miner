@@ -6,12 +6,12 @@
 // It gives the machine an address, DNS and a way out to the internet, and
 // forwards two loopback ports of the host to the machine's SSH and remote
 // desktop. What it refuses is in policy.go: a rented machine cannot reach
-// the owner's local network or this Mac, and cannot send mail.
+// the owner's local network or this Mac, and cannot send mail; abuse.go
+// stops it scanning or flooding from the owner's address.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -83,7 +83,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	json.NewEncoder(os.Stdout).Encode(map[string]any{"ready": true, "guest": guestIP, "ssh": *sshListen, "vnc": *vncListen})
+	// Standard output carries JSON lines for the app: this one, and one
+	// {"event":"abuse",...} if the network is cut for abuse.
+	stdout := &jsonLines{w: os.Stdout}
+	stdout.write(map[string]any{"ready": true, "guest": guestIP, "ssh": *sshListen, "vnc": *vncListen})
 
 	// A datagram socket does not report that its other end is gone, so the
 	// app's death is noticed by its absence: this process is then adopted
@@ -100,17 +103,28 @@ func main() {
 
 	home := &homeAddrs{}
 	go watchHome(ctx, *api, home)
-	filtered := &filteredConn{Conn: conn, guestNet: mustCIDR(subnet), home: home, gateway: netip.MustParseAddr(gatewayIP)}
+	gw := netip.MustParseAddr(gatewayIP)
+	guard := newAbuseGuard(gw.As4(), func(e abuseEvent) { stdout.write(e) })
+	filtered := &filteredConn{Conn: conn, guestNet: mustCIDR(subnet), home: home, gateway: gw, abuse: guard}
 	go func() {
-		for s := range holds {
-			held := s == syscall.SIGUSR1
-			if filtered.held.Swap(held) != held {
-				log.Printf("network held: %v", held)
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				guard.tick(now)
 			}
 		}
 	}()
+	go func() {
+		for s := range holds {
+			filtered.leaseHold(s == syscall.SIGUSR1)
+		}
+	}()
 	if *limitsFile != "" {
-		go watchLimits(ctx, *limitsFile, &filtered.up, &filtered.down)
+		go watchLimits(ctx, *limitsFile, &filtered.up, &filtered.down, guard)
 	}
 	done := make(chan error, 1)
 	go func() { done <- vn.AcceptVfkit(ctx, filtered) }()
@@ -128,6 +142,9 @@ func main() {
 	}
 	if u, d := filtered.limitedUp.Load(), filtered.limitedDown.Load(); u+d > 0 {
 		log.Printf("bandwidth limits: dropped %d frames out, paced %d in", u, d)
+	}
+	if f, u := guard.droppedFlows.Load(), guard.droppedUDP.Load(); f+u > 0 {
+		log.Printf("abuse limits: dropped %d new connections or flows, %d UDP packets", f, u)
 	}
 }
 

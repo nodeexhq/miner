@@ -38,7 +38,17 @@ public final class GuestNetwork: @unchecked Sendable {
             process.arguments! += ["-api", api]
         }
         process.standardInput = helperEnd
-        process.standardOutput = FileHandle.nullDevice
+        // Standard output carries JSON lines: {"ready":true,...} once, and
+        // {"event":"abuse",...} if the helper cut the machine's network for
+        // scanning or flooding from the owner's address.
+        let output = Pipe()
+        process.standardOutput = output
+        let lines = LineBuffer()
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            if data.isEmpty { handle.readabilityHandler = nil; return }
+            for line in lines.append(data) { self?.received(line) }
+        }
         // What the helper says goes to the system log, where an owner (or
         // support) can find why a machine has no network.
         let errors = Pipe()
@@ -61,6 +71,28 @@ public final class GuestNetwork: @unchecked Sendable {
     /// Called if the helper stops on its own: the machine has lost its
     /// network and should be replaced.
     public var onExit: (@Sendable () -> Void)?
+
+    /// The helper cut the machine's network, both ways, for abuse: what it
+    /// saw the machine do. The cut lasts as long as the helper; release()
+    /// does not lift it.
+    public struct Abuse: Sendable, Equatable {
+        /// fan_out, port_scan, half_open, sustained_new_flows or sustained_udp.
+        public let reason: String
+        public let detail: String
+        /// When the helper saw it, RFC 3339.
+        public let time: String
+    }
+
+    /// Called, on a background queue, when the helper reports abuse.
+    public var onAbuse: (@Sendable (Abuse) -> Void)?
+
+    private func received(_ line: String) {
+        guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+              object["event"] as? String == "abuse" else { return }
+        let abuse = Abuse(reason: object["reason"] as? String ?? "", detail: object["detail"] as? String ?? "", time: object["time"] as? String ?? "")
+        NSLog("NodeEx network: cut for abuse: %@: %@", abuse.reason, abuse.detail)
+        onAbuse?(abuse)
+    }
 
     /// Drops all of the machine's traffic, both ways, until release: the
     /// helper holds the network while the lease is not confirmed.

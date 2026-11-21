@@ -14,12 +14,19 @@ protocol VMRuntime: AnyObject {
     func resume() async -> Bool
     func stop() async
     func sshEndpoint(timeout: TimeInterval) async throws -> VMRunner.Endpoint
+    /// Calls handler if the machine's network is cut for abuse.
+    func observeNetworkAbuse(_ handler: @escaping @Sendable (GuestNetwork.Abuse) -> Void)
+}
+
+extension VMRuntime {
+    func observeNetworkAbuse(_ handler: @escaping @Sendable (GuestNetwork.Abuse) -> Void) {}
 }
 
 extension VMRunner: VMRuntime {
     func disconnect() { network?.stop() }
     func holdNetwork() { network?.hold() }
     func releaseNetwork() { network?.release() }
+    func observeNetworkAbuse(_ handler: @escaping @Sendable (GuestNetwork.Abuse) -> Void) { network?.onAbuse = handler }
 }
 
 /// Keeps one fresh virtual machine ready for a renter, keeps it (disk and
@@ -50,6 +57,13 @@ public final class MachineController: LeaseMachine {
         didSet { if state != oldValue { onChange?(state) } }
     }
     public var onChange: ((State) -> Void)?
+
+    /// Set when the current machine's network helper cut its network for
+    /// abuse (scanning, flooding); nil again for the next machine. The cut
+    /// stays, whatever the lease does, until the machine is replaced.
+    /// Ending the lease and telling the platform are not done here yet.
+    public private(set) var networkAbuse: GuestNetwork.Abuse?
+    public var onNetworkAbuse: ((GuestNetwork.Abuse) -> Void)?
 
     private let store: VMStore
     private let resources: VMResources
@@ -194,6 +208,15 @@ public final class MachineController: LeaseMachine {
                     self.running = false
                     self.state = .failed("the machine's network stopped")
                     self.retry(self.generation)
+                }
+            }
+            networkAbuse = nil
+            next.observeNetworkAbuse { [weak self] abuse in
+                Task { @MainActor in
+                    guard let self, self.runnerBoot == boot else { return }
+                    NSLog("NodeEx machine: network cut for abuse%@: %@ (%@)", self.store.currentLease.map { " in lease \($0)" } ?? "", abuse.reason, abuse.detail)
+                    self.networkAbuse = abuse
+                    self.onNetworkAbuse?(abuse)
                 }
             }
             attach(next, generation: mine)
