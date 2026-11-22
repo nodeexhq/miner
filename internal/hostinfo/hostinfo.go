@@ -4,6 +4,7 @@ package hostinfo
 import (
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -33,6 +34,7 @@ func Collect() hostspec.HostSpecs {
 			h.MemoryGB = int((mem + gib/2) / gib)
 		}
 		h.MacOS = output("sw_vers", "-productVersion")
+		h.GPUCores = gpuCores(output("ioreg", "-rc", "AGXAccelerator", "-d", "1"))
 	}
 	var fs syscall.Statfs_t
 	// The data volume is where VM images live; "/" is the sealed system volume.
@@ -45,6 +47,23 @@ func Collect() hostspec.HostSpecs {
 		h.DiskFreeGB = int(fs.Bavail * uint64(fs.Bsize) / gib)
 	}
 	return h
+}
+
+// gpuCorePattern finds the GPU core count in ioreg's description of the
+// Apple GPU: a line such as `"gpu-core-count" = 10`.
+var gpuCorePattern = regexp.MustCompile(`"gpu-core-count"\s*=\s*(\d+)`)
+
+// gpuCores reads the GPU core count from ioreg output, or 0.
+func gpuCores(ioreg string) int {
+	m := gpuCorePattern.FindStringSubmatch(ioreg)
+	if m == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n < 0 || n > 1024 {
+		return 0
+	}
+	return n
 }
 
 func sysctl(name string) string { return output("sysctl", "-n", name) }
