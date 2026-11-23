@@ -99,7 +99,13 @@ func TestShapedLinks(t *testing.T) {
 		{"10ms 200/100", 10 * time.Millisecond, 200e6, 100e6},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
+			// The shaper is goroutines and sleeps, so on a small shared CI
+			// machine the fastest line falls short of its rate when the
+			// other lines run beside it, so it runs alone (Go starts the parallel
+			// subtests only once the loop is done).
+			if c.down < 100e6 {
+				t.Parallel()
+			}
 			client, server := link(t, c.rtt, c.down, c.up)
 			lim := leasetoken.DefaultTestLimits()
 			start := time.Now()
