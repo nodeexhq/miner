@@ -211,7 +211,7 @@ func TestPaceWaitsBrieflyThenDrops(t *testing.T) {
 	var b bucket
 	b.set(8) // 1 MB/s
 	now := time.Now()
-	b.pace(1<<30, now, 0) // nothing taken: far over
+	b.pace(1<<30, now, 0)      // nothing taken: far over
 	now = now.Add(time.Second) // the bucket fills
 	// Empty the burst.
 	if w, ok := b.pace(int(b.burst), now, upQueue); !ok || w != 0 {

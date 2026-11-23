@@ -29,7 +29,7 @@ type machineBandwidth struct {
 // lease:null would destroy the renter's disk. Only explicit null means idle.
 func (r *heartbeatResponse) UnmarshalJSON(data []byte) error {
 	var wire struct {
-		Status string          `json:"status"`
+		Status    string            `json:"status"`
 		Lease     json.RawMessage   `json:"lease"`
 		Bandwidth *machineBandwidth `json:"machine_bandwidth"`
 	}
