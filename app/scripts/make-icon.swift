@@ -1,13 +1,18 @@
-// Draws an app icon: the white NVTO mark on a flat tile. Run by
+// Draws an app icon: the white NVTO mark on a tile. Run by
 // scripts/make-icon.sh together with Sources/*/MenuBarMark.swift (which holds
-// the mark). Arguments: OUTPUT.png TILE-HEX [avatar]. "avatar" fills the whole
+// the mark). Arguments: OUTPUT.png TILE [avatar]. TILE is one hex colour, or
+// two ("#2FA8F0,#2E5FE0") for a gradient from top left to bottom right, as on
+// the website's tiles. "avatar" fills the whole
 // square, for places that crop the picture themselves; otherwise it is a macOS
 // icon, a rounded tile with room around it.
 import AppKit
 
 let args = CommandLine.arguments
-let hex = Int(args[2].dropFirst(), radix: 16)!
-let tileColor = CGColor(srgbRed: CGFloat(hex >> 16 & 255) / 255, green: CGFloat(hex >> 8 & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
+func color(_ s: Substring) -> CGColor {
+    let hex = Int(s.dropFirst(), radix: 16)!
+    return CGColor(srgbRed: CGFloat(hex >> 16 & 255) / 255, green: CGFloat(hex >> 8 & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
+}
+let tileColors = args[2].split(separator: ",").map(color)
 let avatar = args.count > 3 && args[3] == "avatar"
 
 let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1024, pixelsHigh: 1024, bitsPerSample: 8, samplesPerPixel: 4,
@@ -21,11 +26,21 @@ if !avatar {
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: 10), blur: 24, color: CGColor(gray: 0, alpha: 0.28))
     ctx.addPath(CGPath(roundedRect: tile, cornerWidth: 186, cornerHeight: 186, transform: nil))
-    ctx.setFillColor(tileColor); ctx.fillPath()
+    ctx.setFillColor(tileColors[0]); ctx.fillPath()
     ctx.restoreGState()
+    ctx.addPath(CGPath(roundedRect: tile, cornerWidth: 186, cornerHeight: 186, transform: nil))
 } else {
-    ctx.setFillColor(tileColor); ctx.fill(tile)
+    ctx.addRect(tile)
 }
+ctx.saveGState()
+ctx.clip()
+if tileColors.count > 1 {
+    let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: tileColors as CFArray, locations: nil)!
+    ctx.drawLinearGradient(g, start: CGPoint(x: tile.minX, y: tile.minY), end: CGPoint(x: tile.maxX, y: tile.maxY), options: [])
+} else {
+    ctx.setFillColor(tileColors[0]); ctx.fill(tile)
+}
+ctx.restoreGState()
 let markSize = tile.width * (avatar ? 0.42 : 0.56)
 ctx.setFillColor(CGColor(gray: 1, alpha: 1))
 NVTOMark.fill(in: CGRect(x: tile.midX - markSize / 2, y: tile.midY - markSize / 2, width: markSize, height: markSize), context: ctx)
