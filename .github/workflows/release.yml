@@ -64,7 +64,7 @@ jobs:
 
       - name: The app, for a test build
         if: ${{ contains(github.ref_name, '-') }}
-        run: gh release upload "$TAG" app/dist/NodeEx-Miner-"$TAG".dmg --clobber
+        run: gh release upload "$TAG" app/dist/NVTO-Miner-"$TAG".dmg --clobber
 
       - name: Update feed
         # A test build (a tag with a suffix, such as v0.1.16-test.1) is published

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the disk image owners download: "NodeEx Miner.app" signed with a
+# Builds the disk image owners download: "NVTO Miner.app" signed with a
 # Developer ID, notarized by Apple and stapled, so it opens without a
 # warning and without a network connection.
 #
@@ -18,9 +18,9 @@ export VERSION SIGN_IDENTITY
 "$APP_DIR/scripts/bundle.sh"
 DIST="$APP_DIR/dist"
 STAGE=$(mktemp -d)
-cp -R "$DIST/NodeEx Miner.app" "$STAGE/"
+cp -R "$DIST/NVTO Miner.app" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-DMG="$DIST/NodeEx-Miner-$VERSION.dmg"
+DMG="$DIST/NVTO-Miner-$VERSION.dmg"
 [ ! -f "$DMG" ] || mv "$DMG" "$DIST/.old-$(date +%s).dmg"
 hdiutil create -quiet -volname "NVTO Miner" -srcfolder "$STAGE" -fs HFS+ -format UDZO "$DMG"
 codesign --force --timestamp -s "$SIGN_IDENTITY" "$DMG"

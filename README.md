@@ -80,7 +80,7 @@ not yet arrive from the platform. Until the app ships, the command-line Miner fo
 itself, as before.
 
 ```sh
-app/scripts/bundle.sh        # builds app/dist/NodeEx Miner.app and app/dist/nodeex-vm
+app/scripts/bundle.sh        # builds app/dist/NVTO Miner.app and app/dist/nodeex-vm
 app/dist/nodeex-vm status
 app/dist/nodeex-vm install   # download macOS and install the base machine
 app/dist/nodeex-vm setup     # boot it in a window: create an account, turn on Remote Login and Screen Sharing, shut down
@@ -169,8 +169,8 @@ file. Before running a build, check it:
 
 ```sh
 shasum -a 256 -c SHA256SUMS --ignore-missing
-spctl -a -vv -t install NodeEx-Miner-vX.Y.Z.dmg                 # source=Notarized Developer ID
-codesign -dv NodeEx-Miner-vX.Y.Z.dmg 2>&1 | grep TeamIdentifier # TeamIdentifier=7GS265YM4T
+spctl -a -vv -t install NVTO-Miner-vX.Y.Z.dmg                 # source=Notarized Developer ID
+codesign -dv NVTO-Miner-vX.Y.Z.dmg 2>&1 | grep TeamIdentifier # TeamIdentifier=7GS265YM4T
 ```
 
 A fork of this code is not an official build, whatever it is called, and cannot carry that signature. See

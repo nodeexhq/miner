@@ -11,7 +11,7 @@ set -eu
 TAG=$1
 APP_DIR=$(cd "$(dirname "$0")/.." && pwd)
 REPO=$(cd "$APP_DIR/.." && pwd)
-DMG="$APP_DIR/dist/NodeEx-Miner-$TAG.dmg"
+DMG="$APP_DIR/dist/NVTO-Miner-$TAG.dmg"
 [ -f "$DMG" ] || { echo "no $DMG: run package.sh with the tag checked out" >&2; exit 1; }
 BUILD=$(git -C "$REPO" rev-list --count "$TAG")
 # The update-signing key is in the keychain on a developer's Mac, and in a
