@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nodeexhq/miner/leasetoken"
+	"github.com/nvtohq/node/leasetoken"
 )
 
 // shaped carries src to dst as one direction of a line does: a bottleneck
@@ -83,7 +83,7 @@ func link(t *testing.T, rtt time.Duration, downBps, upBps float64) (client, serv
 }
 
 // Over lines from fast and near to slow and far, the whole test ends
-// inside the Miner's 10 s, with figures that match the line.
+// inside the node's 10 s, with figures that match the line.
 func TestShapedLinks(t *testing.T) {
 	for _, c := range []struct {
 		name     string

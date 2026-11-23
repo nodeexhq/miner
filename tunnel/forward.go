@@ -1,4 +1,4 @@
-// Package tunnel holds the TCP forwarding shared by the Miner and Connect
+// Package tunnel holds the TCP forwarding shared by the node and Connect
 // prototypes.
 package tunnel
 
@@ -95,7 +95,7 @@ type Rule struct {
 }
 
 // ParseRule parses "PORT=TARGET", for example "22=192.168.64.5:22" on the
-// Miner or "10022=22" on Connect.
+// node or "10022=22" on Connect.
 func ParseRule(s string) (Rule, error) {
 	port, target, ok := strings.Cut(s, "=")
 	if !ok || target == "" {

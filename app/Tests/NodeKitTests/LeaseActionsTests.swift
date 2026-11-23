@@ -1,5 +1,5 @@
 import XCTest
-@testable import MinerKit
+@testable import NodeKit
 
 @MainActor
 final class AbuseReporterTests: XCTestCase {
@@ -71,20 +71,20 @@ final class AbuseReporterTests: XCTestCase {
             CoreCLI.Result(status: status, output: out, errors: err)
         }
         XCTAssertEqual(AbuseOutcome(result(0, "{}\n")), .reported)
-        XCTAssertEqual(AbuseOutcome(result(3, "", "nodeex-miner: POST /v1/nodes/n/abuse: no (lease_not_current)\n")), .leaseEnded)
-        XCTAssertEqual(AbuseOutcome(result(4, "", "nodeex-miner: refused\n")), .refused("refused"))
-        XCTAssertEqual(AbuseOutcome(result(1, "", "nodeex-miner: offline\n")), .failed("offline"))
+        XCTAssertEqual(AbuseOutcome(result(3, "", "nvto-node: POST /v1/nodes/n/abuse: no (lease_not_current)\n")), .leaseEnded)
+        XCTAssertEqual(AbuseOutcome(result(4, "", "nvto-node: refused\n")), .refused("refused"))
+        XCTAssertEqual(AbuseOutcome(result(1, "", "nvto-node: offline\n")), .failed("offline"))
 
-        let json = #"{"lease_id":"lease-1","ended_at":"2026-11-21T10:00:00.123456Z","refunded":"12.50","mining":false,"paused_until":"2026-11-28T10:00:00Z"}"#
+        let json = #"{"lease_id":"lease-1","ended_at":"2026-11-21T10:00:00.123456Z","refunded":"12.50","hosting":false,"paused_until":"2026-11-28T10:00:00Z"}"#
         guard case .stopped(let reply) = StopLeaseOutcome(result(0, json + "\n")) else { return XCTFail("not stopped") }
         XCTAssertEqual(reply.leaseID, "lease-1")
         XCTAssertEqual(reply.refunded, "12.50")
-        XCTAssertFalse(reply.mining)
+        XCTAssertFalse(reply.hosting)
         XCTAssertEqual(reply.pausedUntil, ISO8601DateFormatter().date(from: "2026-11-28T10:00:00Z"))
-        guard case .stopped(let unpaused) = StopLeaseOutcome(result(0, #"{"lease_id":"l","ended_at":"2026-11-21T10:00:00Z","refunded":"1.00","mining":false}"#)) else { return XCTFail() }
+        guard case .stopped(let unpaused) = StopLeaseOutcome(result(0, #"{"lease_id":"l","ended_at":"2026-11-21T10:00:00Z","refunded":"1.00","hosting":false}"#)) else { return XCTFail() }
         XCTAssertNil(unpaused.pausedUntil)
-        XCTAssertEqual(StopLeaseOutcome(result(3, "", "nodeex-miner: x (lease_not_current)")), .leaseEnded)
-        XCTAssertEqual(StopLeaseOutcome(result(1, "", "nodeex-miner: offline")), .failed("offline"))
+        XCTAssertEqual(StopLeaseOutcome(result(3, "", "nvto-node: x (lease_not_current)")), .leaseEnded)
+        XCTAssertEqual(StopLeaseOutcome(result(1, "", "nvto-node: offline")), .failed("offline"))
         if case .failed = StopLeaseOutcome(result(0, "garbage")) {} else { XCTFail("garbage reply") }
     }
 }

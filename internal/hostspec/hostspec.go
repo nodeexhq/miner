@@ -1,8 +1,8 @@
-// Package hostspec describes the hardware of a machine as the Miner reports
+// Package hostspec describes the hardware of a machine as the node reports
 // it to the platform.
 package hostspec
 
-// HostSpecs is what the Miner measures on the machine it runs on. The JSON
+// HostSpecs is what the node measures on the machine it runs on. The JSON
 // names are part of the platform's API.
 type HostSpecs struct {
 	Model    string `json:"model"`

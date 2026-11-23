@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// probeInterval is how often the Miner has the platform re-measure its link.
+// probeInterval is how often the node has the platform re-measure its link.
 const probeInterval = 6 * time.Hour
 
 // probeTimeout bounds each direction of a probe. A link too slow to move
@@ -42,7 +42,7 @@ type probeTicket struct {
 	DownloadBytes int64  `json:"download_bytes"`
 }
 
-// runProbe has this node's uplink and downlink measured. The Miner only
+// runProbe has this node's uplink and downlink measured. The node only
 // moves the bytes; the timing is done by the other end.
 func runProbe(ctx context.Context, id identity, priv ed25519.PrivateKey) (string, error) {
 	var ticket probeTicket
@@ -111,7 +111,7 @@ func probeWorker(ctx context.Context, t probeTicket) (string, error) {
 		return "", fmt.Errorf("uplink probe: %w", err)
 	}
 
-	// Downlink: the Miner proves it received everything by returning the
+	// Downlink: the node proves it received everything by returning the
 	// payload's last bytes, and the Worker stops the clock on that.
 	dctx, cancel2 := context.WithTimeout(ctx, probeTimeout)
 	defer cancel2()

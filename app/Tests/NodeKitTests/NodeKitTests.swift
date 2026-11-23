@@ -1,11 +1,11 @@
 import XCTest
-@testable import MinerKit
+@testable import NodeKit
 
-final class MinerKitTests: XCTestCase {
+final class NodeKitTests: XCTestCase {
     /// The core's events arrive as JSON lines and its log separately; a
     /// core that exits is started again.
     func testSupervisorReadsEventsAndRestarts() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("minerkit-\(UUID().uuidString)")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("nodekit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let fake = dir.appendingPathComponent("fake-core")
@@ -108,9 +108,9 @@ final class CoreCLITests: XCTestCase {
     /// A refusal shows the requirements that were not met, not the core's
     /// closing line.
     func testRefusalNamesTheReasons() {
-        let refused = CoreCLI.Result(status: 1, output: "this machine: MacBook Pro\ndoes NOT meet the minimum requirements:\n  - laptops are not accepted\n  - at least 100 GB of free disk is needed\n", errors: "nodeex-miner: not enrolling\n")
+        let refused = CoreCLI.Result(status: 1, output: "this machine: MacBook Pro\ndoes NOT meet the minimum requirements:\n  - laptops are not accepted\n  - at least 100 GB of free disk is needed\n", errors: "nvto-node: not enrolling\n")
         XCTAssertEqual(refused.message, "This Mac cannot be a node:\n• laptops are not accepted\n• at least 100 GB of free disk is needed")
-        let other = CoreCLI.Result(status: 1, output: "this machine: Mac mini\nmeets the minimum requirements to be an NVTO node\n", errors: "nodeex-miner: POST /v1/nodes/enroll: this enroll code has been used (token_used)\n")
+        let other = CoreCLI.Result(status: 1, output: "this machine: Mac mini\nmeets the minimum requirements to be an NVTO node\n", errors: "nvto-node: POST /v1/nodes/enroll: this enroll code has been used (token_used)\n")
         XCTAssertEqual(other.message, "POST /v1/nodes/enroll: this enroll code has been used (token_used)")
     }
 }
@@ -141,10 +141,10 @@ final class FirstRunScriptTests: XCTestCase {
     func testScriptMakesTheAccountOnceAndRemovesItsTrigger() {
         let s = Provisioning.firstRunScript
         XCTAssertTrue(s.hasPrefix("#!/bin/sh\n"))
-        XCTAssertTrue(s.contains("U=nodeex\n"))
+        XCTAssertTrue(s.contains("U=nvto\n"))
         for step in ["sysadminctl -addUser $U", "openssl rand", "system/com.openssh.sshd", "system/com.apple.screensharing",
-                     ".AppleSetupDone", "com.apple.access_ssh", "-a $U -t user", "IsHidden 1", "pmset -a sleep 0", ".nodeex-firstboot-ok", "checkmember -m $U", "AutomaticDownload -bool false", "shutdown -h now",
-                     "D=/Users/Shared/NodeEx\n", "2HCKV38EEC", "PU9BNSBJW7", "spctl -a -t install"] {
+                     ".AppleSetupDone", "com.apple.access_ssh", "-a $U -t user", "IsHidden 1", "pmset -a sleep 0", ".nvto-firstboot-ok", "checkmember -m $U", "AutomaticDownload -bool false", "shutdown -h now",
+                     "D=/Users/Shared/NVTO\n", "2HCKV38EEC", "PU9BNSBJW7", "spctl -a -t install"] {
             XCTAssertTrue(s.contains(step), step)
         }
         XCTAssertFalse(s.contains("    #!/"), "the script must not be indented")

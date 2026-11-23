@@ -12,21 +12,21 @@ import (
 
 // Test tokens admit a renter's Connect client to a node's connection test,
 // before any lease exists. They are lease tokens in format and signature
-// (same key, same "NODEEX-LEASE-V1." signing prefix, so Miners verify them
+// (same key, same "NVTO-LEASE-V1." signing prefix, so nodes verify them
 // offline exactly as they verify lease tokens) with these differences:
 //
-//   - "services" is exactly ["test"] and "lease_id" is empty, so a Miner
+//   - "services" is exactly ["test"] and "lease_id" is empty, so a node
 //     that knows nothing of tests refuses them: they grant no lease service,
 //     and they name no lease;
-//   - "scope" is "test", and the Miner only takes a token with that scope
+//   - "scope" is "test", and the node only takes a token with that scope
 //     for the test service, and never one without it;
-//   - "jti" is a random token id. The token is single use: a Miner that has
+//   - "jti" is a random token id. The token is single use: a node that has
 //     accepted a token id must refuse it again until the token expires;
 //   - "reservation_id" names the reservation the test is for, and "acct" is
 //     an opaque tag of the renter's account (see AccountTag) for the
-//     Miner's logs; neither is checked by the Miner;
+//     node's logs; neither is checked by the node;
 //   - "test" carries the platform's caps for the test (TestLimits). The
-//     Miner applies them, but never more than its own hard maxima;
+//     node applies them, but never more than its own hard maxima;
 //   - exp - iat is at most TestTTL.
 const (
 	ServiceTest = "test"
@@ -45,14 +45,14 @@ const (
 	TestMaxSeconds   = 10
 )
 
-// Hard maxima the Miner keeps whatever a token says, and its own budget for
+// Hard maxima the node keeps whatever a token says, and its own budget for
 // all tests together.
 const (
-	MinerMaxPings        = 50
-	MinerMaxDownBytes    = 10_000_000
-	MinerMaxUpBytes      = 10_000_000
-	MinerMaxSeconds      = 10
-	MinerHourlyTestBytes = 200_000_000 // both directions, all tests, rolling hour
+	NodeMaxPings        = 50
+	NodeMaxDownBytes    = 10_000_000
+	NodeMaxUpBytes      = 10_000_000
+	NodeMaxSeconds      = 10
+	NodeHourlyTestBytes = 200_000_000 // both directions, all tests, rolling hour
 )
 
 // TestLimits are the caps of one test.
@@ -68,14 +68,14 @@ func DefaultTestLimits() TestLimits {
 	return TestLimits{TestPings, TestMaxDownBytes, TestMaxUpBytes, TestMaxSeconds}
 }
 
-// Clamp returns the limits a Miner applies: the token's, but never above its
+// Clamp returns the limits a node applies: the token's, but never above its
 // hard maxima.
 func (l TestLimits) Clamp() TestLimits {
 	return TestLimits{
-		Pings:        min(max(l.Pings, 0), MinerMaxPings),
-		MaxDownBytes: min(max(l.MaxDownBytes, 0), MinerMaxDownBytes),
-		MaxUpBytes:   min(max(l.MaxUpBytes, 0), MinerMaxUpBytes),
-		MaxSeconds:   min(max(l.MaxSeconds, 0), MinerMaxSeconds),
+		Pings:        min(max(l.Pings, 0), NodeMaxPings),
+		MaxDownBytes: min(max(l.MaxDownBytes, 0), NodeMaxDownBytes),
+		MaxUpBytes:   min(max(l.MaxUpBytes, 0), NodeMaxUpBytes),
+		MaxSeconds:   min(max(l.MaxSeconds, 0), NodeMaxSeconds),
 	}
 }
 
@@ -103,7 +103,7 @@ func NewTokenID() string {
 // account and reservation without telling the node's owner who the renter
 // is.
 func AccountTag(accountID, reservationID string) string {
-	sum := sha256.Sum256([]byte("nodeex-test-acct\x00" + accountID + "\x00" + reservationID))
+	sum := sha256.Sum256([]byte("nvto-test-acct\x00" + accountID + "\x00" + reservationID))
 	return hex.EncodeToString(sum[:16])
 }
 
@@ -123,7 +123,7 @@ func IssueTest(priv ed25519.PrivateKey, g TestGrant) (string, Claims, error) {
 	return tok, c, err
 }
 
-// VerifyTest is what the Miner's gate does with a token presented for the
+// VerifyTest is what the node's gate does with a token presented for the
 // test service: the signature, expiry and node as for any token, then that
 // it is a well-formed test token. It does not check single use; see
 // ReplayGuard.
@@ -142,8 +142,8 @@ func VerifyTest(pub ed25519.PublicKey, token, nodeID string, now time.Time) (Cla
 	return c, nil
 }
 
-// ReplayGuard remembers the test token ids a Miner has accepted, until the
-// tokens expire. It is the reference for the Miner's single-use rule.
+// ReplayGuard remembers the test token ids a node has accepted, until the
+// tokens expire. It is the reference for the node's single-use rule.
 type ReplayGuard struct {
 	mu   sync.Mutex
 	seen map[string]int64 // token id -> exp (Unix seconds)

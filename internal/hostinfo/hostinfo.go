@@ -1,4 +1,4 @@
-// Package hostinfo collects the machine facts a Miner reports.
+// Package hostinfo collects the machine facts a node reports.
 package hostinfo
 
 import (
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/nodeexhq/miner/internal/hostspec"
+	"github.com/nvtohq/node/internal/hostspec"
 )
 
 const gib = 1 << 30

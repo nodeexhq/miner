@@ -118,13 +118,13 @@ public struct StopLeaseReply: Decodable, Equatable, Sendable {
     /// What the renter got back: the period's whole rent, as the platform
     /// formats money.
     public let refunded: String
-    /// False: the stop switched mining off on this node.
-    public let mining: Bool
+    /// False: the stop switched hosting off on this node.
+    public let hosting: Bool
     /// Set when the node was stopped too often and takes no orders until then.
     public let pausedUntil: Date?
 
     enum CodingKeys: String, CodingKey {
-        case leaseID = "lease_id", refunded, mining
+        case leaseID = "lease_id", refunded, hosting
         case pausedUntil = "paused_until"
     }
 }

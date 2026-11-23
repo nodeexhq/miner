@@ -3,8 +3,8 @@ import AppKit
 /// The NVTO mark: a chip with its corners cut, split into four pieces by
 /// three cuts that draw an N. The four paths are copied from the site's
 /// master drawing (web/public/mark.svg, a 1024 × 1024 box). The same file is
-/// in the Miner and Connect apps.
-public enum NodeExMark {
+/// in the Node and Connect apps.
+public enum NVTOMark {
     static let paths = [
         "M170.7 53.3 L224 0 L653 0 L653 535.6Z",
         "M819 19 L1024 224 L1024 800 L970.7 853.3 L819 701.6Z",
@@ -74,7 +74,7 @@ public enum NodeExMark {
 /// The mark for the menu bar, in one colour as a template image so macOS
 /// tints it for light and dark menu bars. The two apps sit side by side in
 /// the menu bar, so they differ in shape: Connect shows the bare mark, the
-/// Miner the mark cut out of a solid tile (this Mac is a node).
+/// Node app the mark cut out of a solid tile (this Mac is a node).
 public enum MenuBarMark {
     public enum Badge { case none, dot, dimmed }
     public enum Style { case plain, tile }
@@ -88,13 +88,13 @@ public enum MenuBarMark {
             let box = CGRect(origin: .zero, size: size)
             switch style {
             case .plain:
-                NodeExMark.fill(in: box, context: ctx)
+                NVTOMark.fill(in: box, context: ctx)
             case .tile:
                 let tile = box.insetBy(dx: height * 0.03, dy: height * 0.03)
                 ctx.addPath(CGPath(roundedRect: tile, cornerWidth: height * 0.26, cornerHeight: height * 0.26, transform: nil))
                 ctx.fillPath()
                 ctx.setBlendMode(.clear)
-                NodeExMark.fill(in: box.insetBy(dx: height * 0.17, dy: height * 0.17), context: ctx)
+                NVTOMark.fill(in: box.insetBy(dx: height * 0.17, dy: height * 0.17), context: ctx)
                 ctx.setBlendMode(.normal)
             }
             if badge == .dot {

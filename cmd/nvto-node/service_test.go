@@ -11,15 +11,15 @@ import (
 
 func TestServicePlist(t *testing.T) {
 	// Paths with spaces and XML metacharacters must survive intact.
-	exe := "/Applications/Node Ex & Co/nodeex-miner"
-	dir := "/Users/someone/Library/Application Support/NodeEx/<miner>"
+	exe := "/Applications/NVTO & Co/nvto-node"
+	dir := "/Users/someone/Library/Application Support/NVTO/<node>"
 	plist := servicePlist(exe, dir, []string{"-ssh-target", "192.168.64.5:22"})
 
 	text := string(plist)
 	for _, want := range []string{
-		"<string>/Applications/Node Ex &amp; Co/nodeex-miner</string>",
+		"<string>/Applications/NVTO &amp; Co/nvto-node</string>",
 		"<string>run</string>",
-		"NodeEx/&lt;miner&gt;</string>",
+		"NVTO/&lt;node&gt;</string>",
 		"<string>192.168.64.5:22</string>",
 		"<key>KeepAlive</key>",
 	} {
@@ -43,7 +43,7 @@ func TestServicePlist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `["\/Applications\/Node Ex & Co\/nodeex-miner","run","-dir","\/Users\/someone\/Library\/Application Support\/NodeEx\/<miner>","-ssh-target","192.168.64.5:22"]`
+	want := `["\/Applications\/NVTO & Co\/nvto-node","run","-dir","\/Users\/someone\/Library\/Application Support\/NVTO\/<node>","-ssh-target","192.168.64.5:22"]`
 	if got := strings.TrimSpace(string(out)); got != want {
 		t.Errorf("arguments read back as\n%s\nwant\n%s", got, want)
 	}

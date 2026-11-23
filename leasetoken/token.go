@@ -1,6 +1,6 @@
 // Package leasetoken issues and verifies the short-lived tokens that let a
 // renter's Connect client open connections on a leased node. The platform
-// signs them; Miners verify them offline against the platform's public key.
+// signs them; nodes verify them offline against the platform's public key.
 package leasetoken
 
 import (
@@ -17,7 +17,7 @@ import (
 // active, so a leaked token is useful for minutes at most.
 const TTL = 10 * time.Minute
 
-const prefix = "NODEEX-LEASE-V1."
+const prefix = "NVTO-LEASE-V1."
 
 // Services a token may grant.
 const (

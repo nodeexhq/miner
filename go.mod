@@ -1,4 +1,4 @@
-module github.com/nodeexhq/miner
+module github.com/nvtohq/node
 
 go 1.27.4
 

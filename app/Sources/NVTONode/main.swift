@@ -1,5 +1,5 @@
 import AppKit
-import MinerKit
+import NodeKit
 import ServiceManagement
 import Sparkle
 import SwiftUI
@@ -10,7 +10,7 @@ import Virtualization
 // the node is doing.
 
 @MainActor
-final class MinerModel: ObservableObject {
+final class NodeModel: ObservableObject {
     /// Where the owner is on the way to a running node.
     enum Phase: Equatable {
         case checking
@@ -53,10 +53,10 @@ final class MinerModel: ObservableObject {
     }
     @Published var stopLease: String?
     @Published var stopState: StopState = .confirming
-    /// An emergency stop switched mining off; the owner turns it on again in
+    /// An emergency stop switched hosting off; the owner turns it on again in
     /// the dashboard. Until then the node gets no new leases (and if one
-    /// comes, mining is evidently on again).
-    @Published var miningOff = false
+    /// comes, hosting is evidently on again).
+    @Published var hostingOff = false
     @Published var pausedUntil: Date?
     private var reporter: AbuseReporter?
 
@@ -82,10 +82,10 @@ final class MinerModel: ObservableObject {
     private var triedEnvironmentCode = false
 
     private var environment: [String: String] { ProcessInfo.processInfo.environment }
-    /// NODEEX_MINER_DIR keeps a development run away from the node this Mac
+    /// NVTO_NODE_DIR keeps a development run away from the node this Mac
     /// is really enrolled as.
-    private var stateDirectory: URL? { environment["NODEEX_MINER_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
-    private var api: String { environment["NODEEX_API"] ?? "https://app.nvto.com" }
+    private var stateDirectory: URL? { environment["NVTO_NODE_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) } }
+    private var api: String { environment["NVTO_API"] ?? "https://app.nvto.com" }
 
     /// What the machine's disk will be on this Mac, for the setup window.
     var diskPlan: String {
@@ -101,7 +101,7 @@ final class MinerModel: ObservableObject {
         }
     }
 
-    /// Works out what is missing and either asks for it or starts mining.
+    /// Works out what is missing and either asks for it or starts hosting.
     func start() {
         guard !started else { return }
         started = true
@@ -111,14 +111,14 @@ final class MinerModel: ObservableObject {
 
     private func advance() {
         guard let binary = Self.coreBinary() else {
-            phase = .failed("The nodeex-miner program was not found inside the app.")
+            phase = .failed("The nvto-node program was not found inside the app.")
             return
         }
         let cli = CoreCLI(binary: binary, stateDirectory: stateDirectory)
         guard cli.isEnrolled else {
             // A code in the environment enrolls without a window, for
             // setting up a Mac from a script. It is tried once.
-            if let code = environment["NODEEX_ENROLL_CODE"], !code.isEmpty, !triedEnvironmentCode {
+            if let code = environment["NVTO_ENROLL_CODE"], !code.isEmpty, !triedEnvironmentCode {
                 triedEnvironmentCode = true
                 enroll(code: code)
             } else {
@@ -150,7 +150,7 @@ final class MinerModel: ObservableObject {
         phase = .enrolling
         note = ""
         let cli = CoreCLI(binary: binary, stateDirectory: stateDirectory)
-        let api = api, force = environment["NODEEX_ENROLL_FORCE"] != nil
+        let api = api, force = environment["NVTO_ENROLL_FORCE"] != nil
         Task.detached {
             let result = cli.enroll(code: code, api: api, force: force)
             await MainActor.run {
@@ -288,7 +288,7 @@ final class MinerModel: ObservableObject {
         if awake == nil {
             awake = ProcessInfo.processInfo.beginActivity(
                 options: [.idleSystemSleepDisabled, .suddenTerminationDisabled],
-                reason: "NVTO Miner is serving renters")
+                reason: "NVTO Node is serving renters")
         }
         do {
             let controller = try MachineController(store: store)
@@ -431,8 +431,8 @@ final class MinerModel: ObservableObject {
                 updates.leaseEnded()
                 abuse = nil
             }
-            // A new lease means mining is on again.
-            if let lease, lease != previous { miningOff = false; pausedUntil = nil }
+            // A new lease means hosting is on again.
+            if let lease, lease != previous { hostingOff = false; pausedUntil = nil }
         default: break
         }
     }
@@ -460,14 +460,14 @@ final class MinerModel: ObservableObject {
         case .stopped(let reply):
             NSLog("NVTO: the owner stopped lease %@; the renter was refunded %@", reply.leaseID, reply.refunded)
             stopState = .done(reply)
-            miningOff = !reply.mining
+            hostingOff = !reply.hosting
             pausedUntil = reply.pausedUntil
             // The lease ends, and its machine is erased, on the next
             // heartbeat: the platform reports no lease.
         case .leaseEnded:
             stopState = .failed("The lease has already ended.")
         case .failed(let why):
-            stopState = .failed("The lease was not stopped: \(why). Try again, or stop it from the mining dashboard.")
+            stopState = .failed("The lease was not stopped: \(why). Try again, or stop it from the hosting dashboard.")
         }
     }
 
@@ -491,16 +491,16 @@ final class MinerModel: ObservableObject {
         }
     }
 
-    /// The core is shipped inside the app; NODEEX_MINER_BIN overrides it
+    /// The core is shipped inside the app; NVTO_NODE_BIN overrides it
     /// during development.
     static func coreBinary() -> URL? {
         let fm = FileManager.default
-        if let override = ProcessInfo.processInfo.environment["NODEEX_MINER_BIN"], fm.isExecutableFile(atPath: override) {
+        if let override = ProcessInfo.processInfo.environment["NVTO_NODE_BIN"], fm.isExecutableFile(atPath: override) {
             return URL(fileURLWithPath: override)
         }
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/nodeex-miner")
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/nvto-node")
         if fm.isExecutableFile(atPath: bundled.path) { return bundled }
-        let beside = Bundle.main.bundleURL.appendingPathComponent("nodeex-miner")
+        let beside = Bundle.main.bundleURL.appendingPathComponent("nvto-node")
         return fm.isExecutableFile(atPath: beside.path) ? beside : nil
     }
 }
@@ -512,7 +512,7 @@ final class MinerModel: ObservableObject {
 @MainActor
 final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
     private var controller: SPUStandardUpdaterController?
-    private weak var model: MinerModel?
+    private weak var model: NodeModel?
     private var resume: (() -> Void)?
     /// The version of an update that is ready but waiting for the lease to
     /// end, shown in the menu with a way to install it now.
@@ -521,7 +521,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
     /// False for a build that carries no feed address (a development run).
     var available: Bool { controller != nil }
 
-    func start(model: MinerModel) {
+    func start(model: NodeModel) {
         self.model = model
         // A waiting update goes ahead once no renter has been connected for
         // ten minutes: a restart then costs a renter nothing, and their
@@ -536,7 +536,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, ObservableObject {
         controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: self, userDriverDelegate: nil)
         // Sparkle's first check comes some time after launch; a test of
         // the update path asks for one at once.
-        if ProcessInfo.processInfo.environment["NODEEX_CHECK_UPDATES_NOW"] != nil {
+        if ProcessInfo.processInfo.environment["NVTO_CHECK_UPDATES_NOW"] != nil {
             controller?.updater.checkForUpdatesInBackground()
         }
     }
@@ -628,7 +628,7 @@ struct MachineView: NSViewRepresentable {
 }
 
 struct SetupView: View {
-    @ObservedObject var model: MinerModel
+    @ObservedObject var model: NodeModel
     @State private var code = ""
 
     var body: some View {
@@ -636,7 +636,7 @@ struct SetupView: View {
             if model.setupMachine == nil {
                 HStack(spacing: 10) {
                     Image(nsImage: NSApplication.shared.applicationIconImage).resizable().frame(width: 36, height: 36)
-                    Text("NVTO Miner").font(.headline)
+                    Text("NVTO Node").font(.headline)
                 }
             }
             switch model.phase {
@@ -644,17 +644,17 @@ struct SetupView: View {
                 ProgressView(model.phase == .finishing ? "Preparing the machine" : "Checking this Mac")
             case .enroll, .enrolling:
                 Text("Connect this Mac").font(.title2).bold()
-                Text("Open the mining dashboard at app.nvto.com, choose Add a node, and paste the code it gives you. The code works once.")
+                Text("Open the hosting dashboard at app.nvto.com, choose Add a node, and paste the code it gives you. The code works once.")
                 TextField("Enroll code", text: $code).textFieldStyle(.roundedBorder).disabled(model.phase == .enrolling)
                 HStack {
-                    Button("Open the dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nvto.com/mining")!) }
+                    Button("Open the dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nvto.com/hosting")!) }
                     Spacer()
                     Button(model.phase == .enrolling ? "Connecting" : "Connect") { model.enroll(code: code) }
                         .keyboardShortcut(.defaultAction).disabled(model.phase == .enrolling || code.isEmpty)
                 }
             case .machineIntro:
                 Text("Create the machine renters will use").font(.title2).bold()
-                Text("A renter never uses your macOS. They get a virtual machine that is created for their lease and erased when it ends. NVTO Miner downloads macOS from Apple for it, about 17 GB.")
+                Text("A renter never uses your macOS. They get a virtual machine that is created for their lease and erased when it ends. NVTO Node downloads macOS from Apple for it, about 17 GB.")
                 Text(model.diskPlan).foregroundStyle(.secondary)
                 HStack {
                     Spacer()
@@ -688,7 +688,7 @@ struct SetupView: View {
                 }
             case .running:
                 Text("This Mac is an NVTO node").font(.title2).bold()
-                Text("NVTO Miner keeps running in the menu bar. You can close this window.")
+                Text("NVTO Node keeps running in the menu bar. You can close this window.")
             }
             if !model.note.isEmpty {
                 Text(model.note).foregroundStyle(.red).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -700,7 +700,7 @@ struct SetupView: View {
 }
 
 struct MenuContent: View {
-    @ObservedObject var model: MinerModel
+    @ObservedObject var model: NodeModel
     @ObservedObject var updates: Updates
     @Environment(\.openWindow) private var openWindow
     @State private var startsAtLogin = SMAppService.mainApp.status == .enabled
@@ -711,11 +711,11 @@ struct MenuContent: View {
     }
 
     var body: some View {
-        Text("NVTO Miner \(version)")
+        Text("NVTO Node \(version)")
         Divider()
         if model.phase == .running {
             Text("Node: \(model.nodeStatus)")
-            Text(model.coreRunning ? "Miner: running" : "Miner: stopped")
+            Text(model.coreRunning ? "Core: running" : "Core: stopped")
             Text("Remote access: \(model.gate)")
             Text("Machine: \(model.machine)")
             if let lease = model.lease {
@@ -727,8 +727,8 @@ struct MenuContent: View {
                 Text("The renter's machine was cut off the network for abuse (\(abuse.reason.replacingOccurrences(of: "_", with: " "))): \(model.abuseStatus)")
                     .lineLimit(3)
             }
-            if model.miningOff {
-                Text("Mining is off. Turn it on again in the mining dashboard"
+            if model.hostingOff {
+                Text("Hosting is off. Turn it on again in the hosting dashboard"
                      + (model.pausedUntil.map { "; new orders resume \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "") + ".")
                     .lineLimit(3)
             }
@@ -754,7 +754,7 @@ struct MenuContent: View {
         if model.phase == .running && model.lease == nil {
             Button("Rebuild the renters' machine…") { model.rebuildMachine() }
         }
-        Button("Open the mining dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nvto.com/mining")!) }
+        Button("Open the hosting dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nvto.com/hosting")!) }
         if let version = updates.waiting {
             // Ready, but held back so that a renter is not cut off.
             Text("Update \(version) will install once no renter has been connected for 10 minutes")
@@ -776,7 +776,7 @@ struct MenuContent: View {
                 startsAtLogin = SMAppService.mainApp.status == .enabled
             }))
         Divider()
-        Button("Quit NVTO Miner") {
+        Button("Quit NVTO Node") {
             Task {
                 await model.stop()
                 NSApplication.shared.terminate(nil)
@@ -787,7 +787,7 @@ struct MenuContent: View {
 
 /// The owner's emergency stop: what it costs, said plainly, before it is done.
 struct StopLeaseView: View {
-    @ObservedObject var model: MinerModel
+    @ObservedObject var model: NodeModel
     @State private var reason = ""
     @Environment(\.dismiss) private var dismiss
 
@@ -802,7 +802,7 @@ struct StopLeaseView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("• The renter gets this period's rent back in full.")
                     Text("• You are paid nothing for this period.")
-                    Text("• Mining on this node is switched off until you turn it back on in the mining dashboard.")
+                    Text("• Hosting on this node is switched off until you turn it back on in the hosting dashboard.")
                     Text("• Two stops within 30 days pause this node for 7 days.")
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -819,14 +819,14 @@ struct StopLeaseView: View {
             case .done(let reply):
                 Text("The lease is stopped").font(.title2).bold()
                 Text("The renter was refunded $\(reply.refunded), this period's rent in full. You are paid nothing for it.")
-                Text("Mining on this node is now off. Turn it on again in the mining dashboard when you are ready.")
+                Text("Hosting on this node is now off. Turn it on again in the hosting dashboard when you are ready.")
                 if let until = reply.pausedUntil {
                     Text("This node was stopped twice within 30 days: it takes no new orders until \(until.formatted(date: .abbreviated, time: .shortened)).")
                 }
                 Text("The renter's machine is erased as soon as the platform confirms the lease has ended, within a minute.")
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button("Open the mining dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nvto.com/mining")!) }
+                    Button("Open the hosting dashboard") { NSWorkspace.shared.open(URL(string: "https://app.nvto.com/hosting")!) }
                     Spacer()
                     Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
                 }
@@ -847,7 +847,7 @@ struct StopLeaseView: View {
 
 /// Opens the setup window at launch when there is setup to do.
 struct Launcher: View {
-    @ObservedObject var model: MinerModel
+    @ObservedObject var model: NodeModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -864,8 +864,8 @@ struct Launcher: View {
     }
 }
 
-struct MinerApp: App {
-    @StateObject private var model = MinerModel()
+struct NodeApp: App {
+    @StateObject private var model = NodeModel()
 
     var body: some Scene {
         MenuBarExtra {
@@ -873,7 +873,7 @@ struct MinerApp: App {
         } label: {
             Launcher(model: model)
         }
-        Window("NVTO Miner", id: "setup") {
+        Window("NVTO Node", id: "setup") {
             SetupView(model: model)
         }
         .windowResizability(.contentSize)
@@ -891,4 +891,4 @@ let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: 
 terminationSource.setEventHandler { NSApplication.shared.terminate(nil) }
 terminationSource.resume()
 
-MinerApp.main()
+NodeApp.main()

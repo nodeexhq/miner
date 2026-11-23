@@ -1,4 +1,4 @@
-// Package devicesig signs and verifies Miner requests with the node's Ed25519
+// Package devicesig signs and verifies node requests with the node's Ed25519
 // device key.
 package devicesig
 
@@ -13,8 +13,8 @@ import (
 )
 
 const (
-	HeaderTimestamp = "X-NodeEx-Timestamp"
-	HeaderSignature = "X-NodeEx-Signature"
+	HeaderTimestamp = "X-NVTO-Timestamp"
+	HeaderSignature = "X-NVTO-Signature"
 
 	// MaxSkew bounds how far a request timestamp may be from server time,
 	// which also bounds the replay window.
@@ -29,7 +29,7 @@ var (
 
 func message(method, path, ts string, body []byte) []byte {
 	sum := sha256.Sum256(body)
-	return []byte("NODEEX-V1\n" + method + "\n" + path + "\n" + ts + "\n" + hex.EncodeToString(sum[:]))
+	return []byte("NVTO-V1\n" + method + "\n" + path + "\n" + ts + "\n" + hex.EncodeToString(sum[:]))
 }
 
 // Sign returns the timestamp and signature header values for a request.

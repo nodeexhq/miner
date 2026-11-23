@@ -1,4 +1,4 @@
-// nodeex-vmnet is the network of one virtual machine. The macOS app hands
+// nvto-vmnet is the network of one virtual machine. The macOS app hands
 // it the machine's network device as a datagram socket on standard input;
 // every Ethernet frame the machine sends passes through here, in user space
 // and without root, before anything reaches the owner's network.

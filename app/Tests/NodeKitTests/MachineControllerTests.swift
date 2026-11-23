@@ -1,5 +1,5 @@
 import XCTest
-@testable import MinerKit
+@testable import NodeKit
 
 /// Exercise the real controller and disk transitions, replacing only the
 /// Virtualization.framework runner so startup and power-off can be blocked.

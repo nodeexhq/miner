@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nodeexhq/miner/leasetoken"
-	"github.com/nodeexhq/miner/pretest"
+	"github.com/nvtohq/node/leasetoken"
+	"github.com/nvtohq/node/pretest"
 )
 
 type testFixture struct {
@@ -26,7 +26,7 @@ func newTestFixture(t *testing.T) *testFixture {
 	return f
 }
 
-// restart is a new Miner process on the same state directory.
+// restart is a new node process on the same state directory.
 func (f *testFixture) restart(t *testing.T) {
 	t.Helper()
 	g, err := pretest.OpenGuard(f.path, func() bool { return f.leased }, func() time.Time { return f.now })
@@ -155,7 +155,7 @@ func TestTestTokenSingleUse(t *testing.T) {
 	if _, _, err := f.handshake("test", tok); refusedWith(err) != "token-used" {
 		t.Errorf("replay: %s", refusedWith(err))
 	}
-	// The Miner restarts (state on disk) within the token's five minutes.
+	// The node restarts (state on disk) within the token's five minutes.
 	f.now = f.now.Add(4 * time.Minute)
 	f.restart(t)
 	if _, _, err := f.handshake("test", tok); refusedWith(err) != "token-used" {
@@ -266,7 +266,7 @@ func TestTestEndToEnd(t *testing.T) {
 		res.UpReceived != leasetoken.TestMaxUpBytes {
 		t.Errorf("result %+v, report %+v", res, rep)
 	}
-	if left := f.guard.Remaining(); left != leasetoken.MinerHourlyTestBytes-rep.Moved() {
+	if left := f.guard.Remaining(); left != leasetoken.NodeHourlyTestBytes-rep.Moved() {
 		t.Errorf("budget %d left after moving %d", left, rep.Moved())
 	}
 }

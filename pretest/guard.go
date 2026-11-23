@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nodeexhq/miner/leasetoken"
+	"github.com/nvtohq/node/leasetoken"
 )
 
-// BudgetWindow is the rolling window of the Miner's test budget,
-// leasetoken.MinerHourlyTestBytes for all tests together, both ways.
+// BudgetWindow is the rolling window of the node's test budget,
+// leasetoken.NodeHourlyTestBytes for all tests together, both ways.
 const BudgetWindow = time.Hour
 
 var (
@@ -21,12 +21,12 @@ var (
 	// not expired yet.
 	ErrTokenUsed = errors.New("pretest: test token already used")
 	// ErrBusy: a lease is active on the node, a test is running, the
-	// hour's budget is short, or the Miner cannot record the token's use.
+	// hour's budget is short, or the node cannot record the token's use.
 	// The token is not spent; the client may try again.
 	ErrBusy = errors.New("pretest: node is busy")
 )
 
-// Guard decides which tests the Miner admits: each token once, one test at
+// Guard decides which tests the node admits: each token once, one test at
 // a time, none during a lease, and no more than the budget. What it must
 // remember across a restart (the token ids it accepted, until they expire,
 // and what tests cost in the last hour) is kept in a small file.
@@ -149,7 +149,7 @@ func (g *Guard) Remaining() int64 {
 }
 
 func (g *Guard) remainingLocked() int64 {
-	left := int64(leasetoken.MinerHourlyTestBytes)
+	left := int64(leasetoken.NodeHourlyTestBytes)
 	for _, s := range g.spent {
 		left -= s.Bytes
 	}

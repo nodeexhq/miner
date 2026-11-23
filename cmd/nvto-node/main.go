@@ -1,13 +1,13 @@
-// nodeex-miner is the node-side agent. It enrolls this machine with the
+// nvto-node is the node-side agent. It enrolls this machine with the
 // platform and then keeps it reported and online.
 //
-//	nodeex-miner check
-//	nodeex-miner enroll -api URL -token TOKEN [-name NAME] [-dir DIR]
-//	nodeex-miner run [-dir DIR]
-//	nodeex-miner status [-dir DIR]
-//	nodeex-miner service <install|uninstall|status> [-dir DIR] [-- run flags]
-//	nodeex-miner abuse -lease ID -reason REASON [-detail TEXT] [-dir DIR]
-//	nodeex-miner stop-lease -lease ID [-reason TEXT] [-dir DIR]
+//	nvto-node check
+//	nvto-node enroll -api URL -token TOKEN [-name NAME] [-dir DIR]
+//	nvto-node run [-dir DIR]
+//	nvto-node status [-dir DIR]
+//	nvto-node service <install|uninstall|status> [-dir DIR] [-- run flags]
+//	nvto-node abuse -lease ID -reason REASON [-detail TEXT] [-dir DIR]
+//	nvto-node stop-lease -lease ID [-reason TEXT] [-dir DIR]
 package main
 
 import (
@@ -32,31 +32,31 @@ import (
 
 	"tailscale.com/tsnet"
 
-	"github.com/nodeexhq/miner/internal/devicesig"
-	"github.com/nodeexhq/miner/internal/hostinfo"
-	"github.com/nodeexhq/miner/internal/hostspec"
-	"github.com/nodeexhq/miner/internal/requirements"
-	"github.com/nodeexhq/miner/pretest"
+	"github.com/nvtohq/node/internal/devicesig"
+	"github.com/nvtohq/node/internal/hostinfo"
+	"github.com/nvtohq/node/internal/hostspec"
+	"github.com/nvtohq/node/internal/requirements"
+	"github.com/nvtohq/node/pretest"
 )
 
 // version is set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
 const (
-	// The heartbeat is also how the Miner learns a lease was ended early, so
+	// The heartbeat is also how the node learns a lease was ended early, so
 	// this bounds how long a terminated renter stays connected.
 	heartbeatInterval = 15 * time.Second
-	// How often a Miner without remote access tries again to join the
+	// How often a node without remote access tries again to join the
 	// overlay.
 	gateRetryInterval = 5 * time.Minute
-	// isolationLimit is how long the Miner may be unable to reach the
+	// isolationLimit is how long the node may be unable to reach the
 	// platform before it stops serving its lease. It matches the point at
 	// which the platform starts treating the node as offline.
 	isolationLimit = 3 * time.Minute
 	reportInterval = time.Hour
 )
 
-// identity is the Miner's persistent state. The private key never leaves
+// identity is the node's persistent state. The private key never leaves
 // this machine.
 type identity struct {
 	API        string `json:"api"`
@@ -82,7 +82,7 @@ func loadIdentity(dir string) (identity, error) {
 	var id identity
 	b, err := os.ReadFile(identityPath(dir))
 	if errors.Is(err, os.ErrNotExist) {
-		return id, errors.New("this machine is not enrolled; run `nodeex-miner enroll` first")
+		return id, errors.New("this machine is not enrolled; run `nvto-node enroll` first")
 	}
 	if err != nil {
 		return id, err
@@ -92,9 +92,9 @@ func loadIdentity(dir string) (identity, error) {
 
 func defaultDir() string {
 	if d, err := os.UserConfigDir(); err == nil {
-		return filepath.Join(d, "NodeEx", "miner")
+		return filepath.Join(d, "NVTO", "node")
 	}
-	return "nodeex-miner"
+	return "nvto-node"
 }
 
 func main() {
@@ -124,13 +124,13 @@ func main() {
 		usage()
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "nodeex-miner:", err)
+		fmt.Fprintln(os.Stderr, "nvto-node:", err)
 		os.Exit(exitCode(err))
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nodeex-miner <check|enroll|run|status|service|abuse|stop-lease|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: nvto-node <check|enroll|run|status|service|abuse|stop-lease|version> [flags]")
 	os.Exit(2)
 }
 
@@ -231,8 +231,8 @@ func cmdCheck() error {
 
 func cmdEnroll(args []string) error {
 	fs := flag.NewFlagSet("enroll", flag.ExitOnError)
-	api := fs.String("api", os.Getenv("NODEEX_API"), "platform API URL (or $NODEEX_API)")
-	token := fs.String("token", os.Getenv("NODEEX_ENROLL_TOKEN"), "enrollment token from the provider console (or $NODEEX_ENROLL_TOKEN)")
+	api := fs.String("api", os.Getenv("NVTO_API"), "platform API URL (or $NVTO_API)")
+	token := fs.String("token", os.Getenv("NVTO_ENROLL_TOKEN"), "enrollment token from the provider console (or $NVTO_ENROLL_TOKEN)")
 	host, _ := os.Hostname()
 	name := fs.String("name", host, "display name for this node")
 	dir := fs.String("dir", defaultDir(), "state directory")
@@ -257,11 +257,11 @@ func cmdEnroll(args []string) error {
 	}
 	specs := hostinfo.Collect()
 	req := map[string]any{
-		"enroll_token":  *token,
-		"public_key":    base64.StdEncoding.EncodeToString(pub),
-		"name":          *name,
-		"miner_version": version,
-		"host":          specs,
+		"enroll_token": *token,
+		"public_key":   base64.StdEncoding.EncodeToString(pub),
+		"name":         *name,
+		"node_version": version,
+		"host":         specs,
 	}
 	var res struct {
 		NodeID string `json:"node_id"`
@@ -319,14 +319,14 @@ func cmdRun(args []string) error {
 	machineCPU := fs.Int("machine-cpus", 0, "cores of the virtual machine each lease is given (with -machine-memory-gb and -machine-disk-gb)")
 	machineMemory := fs.Int("machine-memory-gb", 0, "memory of that machine")
 	machineDisk := fs.Int("machine-disk-gb", 0, "disk of that machine")
-	events := fs.Bool("events", false, "write state changes to standard output as JSON lines, for a program that supervises the Miner")
+	events := fs.Bool("events", false, "write state changes to standard output as JSON lines, for a program that supervises nvto-node")
 	fs.Parse(args)
 	emit := eventWriter(*events)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if *events {
 		// Supervised: if the supervisor dies, so does the machine it was
-		// running, and a Miner left behind would report a node that can
+		// running, and an agent left behind would report a node that can
 		// serve nobody. Leave with it.
 		parent := os.Getppid()
 		go func() {
@@ -350,7 +350,7 @@ func cmdRun(args []string) error {
 	}
 	report := func() {
 		req := struct {
-			MinerVersion    string             `json:"miner_version"`
+			NodeVersion     string             `json:"node_version"`
 			AcceptingLeases bool               `json:"accepting_leases"`
 			Host            hostspec.HostSpecs `json:"host"`
 		}{version, !*paused, hostinfo.Collect()}
@@ -369,7 +369,7 @@ func cmdRun(args []string) error {
 	}
 	// Join the overlay and open the gate. The platform gives a join key only
 	// to an approved node, and may have no overlay configured at all, so
-	// this can fail: the Miner then still reports and heartbeats, nobody can
+	// this can fail: the node then still reports and heartbeats, nobody can
 	// connect to it, and it tries again from the main loop.
 	state := &leaseState{}
 	// Connection tests a renter runs before ordering. Which tokens were
@@ -432,7 +432,7 @@ func cmdRun(args []string) error {
 		var res heartbeatResponse
 		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		// Every heartbeat carries the Miner's own account of how it is
+		// Every heartbeat carries the node's own account of how it is
 		// running, for the owner's dashboard and for operators.
 		sessions, suspended := state.snapshot()
 		if sessions != lastSessions {
@@ -450,7 +450,7 @@ func cmdRun(args []string) error {
 		req := map[string]any{
 			"overlay_addr": myAddr,
 			"status": map[string]any{
-				"miner_version":  version,
+				"node_version":   version,
 				"uptime_seconds": int64(time.Since(started).Seconds()),
 				"load1":          hostinfo.Load1(),
 				"disk_free_gb":   hostinfo.Collect().DiskFreeGB,
@@ -548,7 +548,7 @@ func cmdRun(args []string) error {
 		log.Printf("speed probe: %s", summary)
 	}
 
-	log.Printf("nodeex-miner %s running as node %s", version, id.NodeID)
+	log.Printf("nvto-node %s running as node %s", version, id.NodeID)
 	report()
 	heartbeat()
 	// Off the main loop: a probe can take half a minute and must not

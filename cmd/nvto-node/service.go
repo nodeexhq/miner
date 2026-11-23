@@ -13,10 +13,10 @@ import (
 	"strconv"
 )
 
-// The Miner runs as a per-user launchd agent: it starts when its user logs
+// nvto-node runs as a per-user launchd agent: it starts when its user logs
 // in and is restarted if it exits. A node that must come back unattended
 // after a power cut therefore needs automatic login enabled for that user.
-const serviceLabel = "com.nodeex.miner"
+const serviceLabel = "com.nvto.node"
 
 func servicePlistPath() (string, error) {
 	home, err := os.UserHomeDir()
@@ -37,7 +37,7 @@ func servicePlist(exe, dir string, extraArgs []string) []byte {
 	for _, a := range append([]string{exe, "run", "-dir", dir}, extraArgs...) {
 		fmt.Fprintf(&args, "\t\t<string>%s</string>\n", esc(a))
 	}
-	logPath := esc(filepath.Join(dir, "miner.log"))
+	logPath := esc(filepath.Join(dir, "node.log"))
 	return []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -77,7 +77,7 @@ func cmdService(args []string) error {
 		return errors.New("the service commands are only supported on macOS")
 	}
 	if len(args) == 0 {
-		return errors.New("usage: nodeex-miner service <install|uninstall|status> [flags] [-- run flags]")
+		return errors.New("usage: nvto-node service <install|uninstall|status> [flags] [-- run flags]")
 	}
 	fs := flag.NewFlagSet("service "+args[0], flag.ExitOnError)
 	dir := fs.String("dir", defaultDir(), "state directory")
@@ -116,7 +116,7 @@ func cmdService(args []string) error {
 		if err := launchctl("bootstrap", domain, plist); err != nil {
 			return err
 		}
-		fmt.Printf("installed: the Miner now starts at login and restarts if it stops\n  job:  %s\n  log:  %s\n", plist, filepath.Join(absDir, "miner.log"))
+		fmt.Printf("installed: nvto-node now starts at login and restarts if it stops\n  job:  %s\n  log:  %s\n", plist, filepath.Join(absDir, "node.log"))
 		fmt.Println("for the node to return unattended after a restart, enable automatic login for this user")
 		return nil
 	case "uninstall":
@@ -124,7 +124,7 @@ func cmdService(args []string) error {
 		if err := os.Remove(plist); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		fmt.Println("uninstalled: the Miner no longer starts automatically")
+		fmt.Println("uninstalled: nvto-node no longer starts automatically")
 		return nil
 	case "status":
 		if _, err := os.Stat(plist); errors.Is(err, os.ErrNotExist) {

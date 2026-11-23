@@ -1,4 +1,4 @@
-// Package overlay wraps tsnet so the Miner and Connect prototypes join the
+// Package overlay wraps tsnet so the node and Connect prototypes join the
 // Headscale-coordinated network the same way.
 package overlay
 
@@ -30,10 +30,10 @@ type Config struct {
 }
 
 // RegisterFlags binds the overlay flags. The auth key defaults to
-// $NODEEX_AUTHKEY so it stays out of shell history.
+// $NVTO_AUTHKEY so it stays out of shell history.
 func (c *Config) RegisterFlags(fs *flag.FlagSet, defaultHostname, defaultStateDir string) {
-	fs.StringVar(&c.ControlURL, "control-url", os.Getenv("NODEEX_CONTROL_URL"), "Headscale URL (or $NODEEX_CONTROL_URL)")
-	fs.StringVar(&c.AuthKey, "auth-key", os.Getenv("NODEEX_AUTHKEY"), "Headscale pre-auth key (or $NODEEX_AUTHKEY)")
+	fs.StringVar(&c.ControlURL, "control-url", os.Getenv("NVTO_CONTROL_URL"), "Headscale URL (or $NVTO_CONTROL_URL)")
+	fs.StringVar(&c.AuthKey, "auth-key", os.Getenv("NVTO_AUTHKEY"), "Headscale pre-auth key (or $NVTO_AUTHKEY)")
 	fs.StringVar(&c.Hostname, "hostname", defaultHostname, "node name on the overlay network")
 	fs.StringVar(&c.StateDir, "state-dir", defaultStateDir, "directory for overlay identity and state")
 	fs.BoolVar(&c.Verbose, "verbose", false, "log tsnet internals")
@@ -60,9 +60,9 @@ func Start(ctx context.Context, c Config, logf func(string, ...any)) (*tsnet.Ser
 	// A trial, not a default: one TCP flow over the overlay falls to a third
 	// of a Wi-Fi link's rate at half a percent of loss or reordering with the
 	// stack's CUBIC, and Reno does about 1.6 times better there, at half the
-	// rate on a loss-free link (tunnel/impaired_test.go). NODEEX_TCP_CC picks
+	// rate on a loss-free link (tunnel/impaired_test.go). NVTO_TCP_CC picks
 	// the algorithm so the two can be compared on a real line.
-	if cc := os.Getenv("NODEEX_TCP_CC"); cc != "" {
+	if cc := os.Getenv("NVTO_TCP_CC"); cc != "" {
 		if err := srv.Start(); err != nil {
 			srv.Close()
 			return nil, fmt.Errorf("start overlay: %w", err)
@@ -70,12 +70,12 @@ func Start(ctx context.Context, c Config, logf func(string, ...any)) (*tsnet.Ser
 		ns, ok := srv.Sys().Netstack.Get().(*netstack.Impl)
 		if !ok {
 			srv.Close()
-			return nil, errors.New("NODEEX_TCP_CC: the overlay has no network stack to set it on")
+			return nil, errors.New("NVTO_TCP_CC: the overlay has no network stack to set it on")
 		}
 		opt := tcpip.CongestionControlOption(cc)
 		if err := ns.SetTransportProtocolOption(tcp.ProtocolNumber, &opt); err != nil {
 			srv.Close()
-			return nil, fmt.Errorf("NODEEX_TCP_CC=%s: %v", cc, err)
+			return nil, fmt.Errorf("NVTO_TCP_CC=%s: %v", cc, err)
 		}
 		logf("overlay TCP congestion control: %s", cc)
 	}

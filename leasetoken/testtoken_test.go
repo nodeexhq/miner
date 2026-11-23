@@ -35,7 +35,7 @@ func TestTestTokenRoundTrip(t *testing.T) {
 		t.Errorf("claims = %+v, issued %+v", c, issued)
 	}
 
-	// The exact wire format the Miner parses.
+	// The exact wire format the node parses.
 	payload, _, _ := strings.Cut(tok, ".")
 	raw, _ := base64.RawURLEncoding.DecodeString(payload)
 	var m map[string]any
@@ -50,7 +50,7 @@ func TestTestTokenRoundTrip(t *testing.T) {
 	}
 
 	// A test token is no use for anything else, and a lease token is no
-	// use for a test: a Miner that only knows lease tokens refuses a test
+	// use for a test: a node that only knows lease tokens refuses a test
 	// token for ssh or vnc (it grants neither), and for "test" it names no
 	// lease, so the gate's current-lease check refuses it too.
 	for _, svc := range []string{ServiceSSH, ServiceVNC} {
@@ -96,7 +96,7 @@ func TestTestTokenRoundTrip(t *testing.T) {
 	if _, _, err := IssueTest(priv, noID); !errors.Is(err, ErrTestGrant) {
 		t.Errorf("token without an id: %v", err)
 	}
-	// Nor would a Miner take one: a hand-made test token without a jti.
+	// Nor would a node take one: a hand-made test token without a jti.
 	bare, _ := Issue(priv, Claims{NodeID: "node-1", Services: []string{ServiceTest}, Scope: ScopeTest, ReservationID: "res-1",
 		Test: &TestLimits{}, IssuedAt: now.Unix(), ExpiresAt: now.Add(time.Minute).Unix()})
 	if _, err := VerifyTest(pub, bare, "node-1", now); !errors.Is(err, ErrMalformed) {
@@ -104,7 +104,7 @@ func TestTestTokenRoundTrip(t *testing.T) {
 	}
 }
 
-// The Miner's single-use rule: a token id is accepted once, and refused for
+// The node's single-use rule: a token id is accepted once, and refused for
 // as long as the token could verify.
 func TestReplayGuard(t *testing.T) {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
@@ -134,11 +134,11 @@ func TestReplayGuard(t *testing.T) {
 
 func TestClamp(t *testing.T) {
 	got := TestLimits{Pings: 1000, MaxDownBytes: 1 << 40, MaxUpBytes: -5, MaxSeconds: 60}.Clamp()
-	want := TestLimits{MinerMaxPings, MinerMaxDownBytes, 0, MinerMaxSeconds}
+	want := TestLimits{NodeMaxPings, NodeMaxDownBytes, 0, NodeMaxSeconds}
 	if got != want {
 		t.Errorf("Clamp = %+v, want %+v", got, want)
 	}
 	if d := DefaultTestLimits(); d.Clamp() != d {
-		t.Errorf("platform defaults exceed the Miner's maxima: %+v", d)
+		t.Errorf("platform defaults exceed the node's maxima: %+v", d)
 	}
 }

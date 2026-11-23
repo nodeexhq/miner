@@ -72,7 +72,7 @@ func TestLeaseStateEndGrace(t *testing.T) {
 	}
 }
 
-func TestSuspendedMinerServesNothing(t *testing.T) {
+func TestSuspendedNodeServesNothing(t *testing.T) {
 	s := &leaseState{}
 	s.set("lease-1", time.Now().Add(time.Hour))
 	a, b := net.Pipe()

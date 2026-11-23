@@ -1,5 +1,5 @@
 // Package requirements defines the minimum hardware a machine needs to join
-// the network as a node. The Miner checks it before enrolling so the owner
+// the network as a node. nvto-node checks it before enrolling so the owner
 // gets a clear answer up front; the platform enforces it again on enrollment.
 package requirements
 
@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nodeexhq/miner/internal/hostspec"
+	"github.com/nvtohq/node/internal/hostspec"
 )
 
 const (

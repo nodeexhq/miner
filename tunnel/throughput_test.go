@@ -96,7 +96,7 @@ func TestThroughput(t *testing.T) {
 	defer cancel()
 	url := startNet(t)
 	a, _ := startNode(t, ctx, url, "connect")
-	b, bIP := startNode(t, ctx, url, "miner")
+	b, bIP := startNode(t, ctx, url, "node")
 
 	// A: plain TCP over the overlay.
 	ln, err := b.Listen("tcp", ":7000")

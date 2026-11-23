@@ -28,6 +28,6 @@ if !avatar {
 }
 let markSize = tile.width * (avatar ? 0.42 : 0.56)
 ctx.setFillColor(CGColor(gray: 1, alpha: 1))
-NodeExMark.fill(in: CGRect(x: tile.midX - markSize / 2, y: tile.midY - markSize / 2, width: markSize, height: markSize), context: ctx)
+NVTOMark.fill(in: CGRect(x: tile.midX - markSize / 2, y: tile.midY - markSize / 2, width: markSize, height: markSize), context: ctx)
 
 try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: args[1]))

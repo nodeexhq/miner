@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nodeexhq/miner/leasetoken"
+	"github.com/nvtohq/node/leasetoken"
 )
 
 type clock struct{ t time.Time }
@@ -53,7 +53,7 @@ func TestGuardSingleUse(t *testing.T) {
 	if _, err := g.Admit(a); !errors.Is(err, ErrTokenUsed) {
 		t.Errorf("replay after a restart: %v", err)
 	}
-	if g.Remaining() != leasetoken.MinerHourlyTestBytes-1000 {
+	if g.Remaining() != leasetoken.NodeHourlyTestBytes-1000 {
 		t.Errorf("budget after a restart: %d left", g.Remaining())
 	}
 
@@ -98,7 +98,7 @@ func TestGuardBusy(t *testing.T) {
 	} else {
 		tk.Done(0)
 	}
-	if g.Remaining() != leasetoken.MinerHourlyTestBytes {
+	if g.Remaining() != leasetoken.NodeHourlyTestBytes {
 		t.Errorf("budget charged twice for one test: %d left", g.Remaining())
 	}
 }
@@ -139,7 +139,7 @@ func TestGuardBudget(t *testing.T) {
 	if err := run(small, 18_000_000); err != nil {
 		t.Errorf("18 MB test with 19 MB left: %v", err)
 	}
-	// Limits above the Miner's maxima are clamped before the budget is
+	// Limits above the node's maxima are clamped before the budget is
 	// checked, so an inflated token is not refused, and not let through
 	// at its own word.
 	c.t = c.t.Add(BudgetWindow)
@@ -148,14 +148,14 @@ func TestGuardBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an hour later: %v", err)
 	}
-	maxima := leasetoken.TestLimits{Pings: leasetoken.MinerMaxPings, MaxDownBytes: leasetoken.MinerMaxDownBytes,
-		MaxUpBytes: leasetoken.MinerMaxUpBytes, MaxSeconds: leasetoken.MinerMaxSeconds}
+	maxima := leasetoken.TestLimits{Pings: leasetoken.NodeMaxPings, MaxDownBytes: leasetoken.NodeMaxDownBytes,
+		MaxUpBytes: leasetoken.NodeMaxUpBytes, MaxSeconds: leasetoken.NodeMaxSeconds}
 	if tk.Limits != maxima {
 		t.Errorf("clamped limits %+v", tk.Limits)
 	}
 	tk.Done(0)
 	// An hour on, all of it has aged out.
-	if left := g.Remaining(); left != leasetoken.MinerHourlyTestBytes {
+	if left := g.Remaining(); left != leasetoken.NodeHourlyTestBytes {
 		t.Errorf("an hour after the last test: %d left", left)
 	}
 }

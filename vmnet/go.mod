@@ -1,4 +1,4 @@
-module github.com/nodeexhq/miner/vmnet
+module github.com/nvtohq/node/vmnet
 
 go 1.27.4
 

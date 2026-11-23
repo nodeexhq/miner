@@ -1,6 +1,6 @@
 import Foundation
 
-/// A state change reported by `nodeex-miner run -events`, one JSON object
+/// A state change reported by `nvto-node run -events`, one JSON object
 /// per line. Unknown fields and events are ignored, so the core can add to
 /// them without breaking the app.
 public struct CoreEvent: Decodable, Sendable {
@@ -31,7 +31,7 @@ public struct CoreEvent: Decodable, Sendable {
 /// its events and log lines to the app.
 public final class CoreSupervisor: @unchecked Sendable {
     public struct Options: Sendable {
-        /// The `nodeex-miner` binary.
+        /// The `nvto-node` binary.
         public var binary: URL
         /// Its state directory; nil for the core's default.
         public var stateDirectory: URL?
@@ -57,7 +57,7 @@ public final class CoreSupervisor: @unchecked Sendable {
     public var onRunning: (@Sendable (Bool) -> Void)?
 
     private let options: Options
-    private let queue = DispatchQueue(label: "com.nodeex.miner.core")
+    private let queue = DispatchQueue(label: "com.nvto.node.core")
     private var process: Process?
     private var wanted = false
     private var restartDelay: TimeInterval = 2
@@ -111,7 +111,7 @@ public final class CoreSupervisor: @unchecked Sendable {
             process = p
             onRunning?(true)
         } catch {
-            onLog?("could not start the Miner core: \(error.localizedDescription)")
+            onLog?("could not start the node core: \(error.localizedDescription)")
             scheduleRestart()
         }
     }
@@ -119,7 +119,7 @@ public final class CoreSupervisor: @unchecked Sendable {
     private func exited(_ finished: Process) {
         process = nil
         onRunning?(false)
-        onLog?("the Miner core exited with status \(finished.terminationStatus)")
+        onLog?("the node core exited with status \(finished.terminationStatus)")
         // A core that ran for a while starts again quickly; one that keeps
         // dying is retried less and less often.
         scheduleRestart()

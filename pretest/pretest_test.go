@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nodeexhq/miner/leasetoken"
+	"github.com/nvtohq/node/leasetoken"
 )
 
 // pair returns the two ends of a loopback TCP connection, so the test runs
@@ -215,7 +215,7 @@ func TestMalformedFrames(t *testing.T) {
 	}
 }
 
-// The Miner closes the test MaxSeconds after OK, whatever the client does.
+// The node closes the test MaxSeconds after OK, whatever the client does.
 func TestDeadline(t *testing.T) {
 	client, server := pair(t)
 	start := time.Now()

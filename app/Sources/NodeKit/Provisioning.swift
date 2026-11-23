@@ -18,7 +18,7 @@ public enum Provisioning {
         let key = store.root.appendingPathComponent("provision_key")
         if !FileManager.default.fileExists(atPath: key.path) {
             try FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
-            try run("/usr/bin/ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "nodeex-host", "-f", key.path])
+            try run("/usr/bin/ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "nvto-host", "-f", key.path])
         }
         return key
     }
@@ -40,15 +40,15 @@ public enum Provisioning {
             let fm = FileManager.default
             // What the automatic first-run setup left: its trigger and
             // script have done their job and must not reach a renter.
-            for leftover in ["private/etc/crontab", "private/var/db/nodeex-firstboot.sh"] {
+            for leftover in ["private/etc/crontab", "private/var/db/nvto-firstboot.sh"] {
                 try? fm.removeItem(at: data.appendingPathComponent(leftover))
             }
             // A machine that set itself up must have passed its own check.
             // (One set up by hand has neither marker.)
             let db = data.appendingPathComponent("private/var/db")
-            if fm.fileExists(atPath: db.appendingPathComponent(".nodeex-firstboot-done").path),
-               !fm.fileExists(atPath: db.appendingPathComponent(".nodeex-firstboot-ok").path) {
-                throw Failure(description: "the machine's own setup did not pass its check (see /var/log/nodeex-firstboot.log in the machine)")
+            if fm.fileExists(atPath: db.appendingPathComponent(".nvto-firstboot-done").path),
+               !fm.fileExists(atPath: db.appendingPathComponent(".nvto-firstboot-ok").path) {
+                throw Failure(description: "the machine's own setup did not pass its check (see /var/log/nvto-firstboot.log in the machine)")
             }
             let users = try fm.contentsOfDirectory(atPath: data.appendingPathComponent("Users").path).filter { $0 != "Shared" && !$0.hasPrefix(".") }
             guard users.count == 1, let account = users.first else {
@@ -87,11 +87,11 @@ public enum Provisioning {
     /// The account the automatic first-run setup makes in the base machine.
     /// It is the host's way in (by key only); its password is random and
     /// kept by nobody. Renters get their own account.
-    static let setupAccount = "nodeex"
+    static let setupAccount = "nvto"
 
     /// Where the base machine keeps the installers of the remote desktops
     /// offered to renters (Jump Desktop Connect, UU Remote).
-    static let installersDirectory = "/Users/Shared/NodeEx"
+    static let installersDirectory = "/Users/Shared/NVTO"
 
     /// The access lists Remote Login and Screen Sharing ask. An account
     /// that is not on them is refused even with the right key or password.
@@ -100,18 +100,18 @@ public enum Provisioning {
     /// What a new machine runs once, as root, at its first boot: it makes
     /// the account, turns on Remote Login and Screen Sharing, marks Setup
     /// Assistant as done, removes its own trigger and shuts down. It logs
-    /// to /var/log/nodeex-firstboot.log in the machine.
+    /// to /var/log/nvto-firstboot.log in the machine.
     static let firstRunScript = """
     #!/bin/sh
-    exec >>/private/var/log/nodeex-firstboot.log 2>&1
-    [ -e /private/var/db/.nodeex-firstboot-done ] && exit 0
-    mkdir /private/var/db/.nodeex-firstboot-lock 2>/dev/null || exit 0
+    exec >>/private/var/log/nvto-firstboot.log 2>&1
+    [ -e /private/var/db/.nvto-firstboot-done ] && exit 0
+    mkdir /private/var/db/.nvto-firstboot-lock 2>/dev/null || exit 0
     date
     U=\(setupAccount)
     # Before the commands are echoed to the log: the password must not be
     # written anywhere.
     if ! /usr/bin/id $U >/dev/null 2>&1; then
-      /usr/sbin/sysadminctl -addUser $U -fullName NodeEx -admin -password "$(/usr/bin/openssl rand -base64 24)" 2>&1 | /usr/bin/grep -v -i password
+      /usr/sbin/sysadminctl -addUser $U -fullName NVTO -admin -password "$(/usr/bin/openssl rand -base64 24)" 2>&1 | /usr/bin/grep -v -i password
     fi
     set -x
     /usr/sbin/createhomedir -c -u $U
@@ -166,7 +166,7 @@ public enum Provisioning {
     # The crontab cannot be removed from in here (the host wrote it); the
     # host removes it once the machine is off. Until then the marker below
     # keeps this from running twice.
-    /usr/bin/touch /private/var/db/.nodeex-firstboot-done
+    /usr/bin/touch /private/var/db/.nvto-firstboot-done
     # The machine checks its own work, and says so only if the host will be
     # able to log in: the account exists, is on both access lists, and
     # Remote Login is loaded. The host does not call the base ready without it.
@@ -176,8 +176,8 @@ public enum Provisioning {
       /usr/sbin/dseditgroup -o checkmember -m $U $g >/dev/null 2>&1 || ok=
     done
     /bin/launchctl print system/com.openssh.sshd >/dev/null 2>&1 || ok=
-    if [ -n "$ok" ]; then /usr/bin/touch /private/var/db/.nodeex-firstboot-ok; fi
-    /bin/rmdir /private/var/db/.nodeex-firstboot-lock
+    if [ -n "$ok" ]; then /usr/bin/touch /private/var/db/.nvto-firstboot-ok; fi
+    /bin/rmdir /private/var/db/.nvto-firstboot-lock
     /sbin/shutdown -h now
 
     """
@@ -195,8 +195,8 @@ public enum Provisioning {
             let fm = FileManager.default
             let users = ((try? fm.contentsOfDirectory(atPath: data.appendingPathComponent("Users").path)) ?? []).filter { $0 != "Shared" && !$0.hasPrefix(".") }
             guard users.isEmpty, !fm.fileExists(atPath: data.appendingPathComponent("private/var/db/.AppleSetupDone").path) else { return false }
-            try firstRunScript.write(to: data.appendingPathComponent("private/var/db/nodeex-firstboot.sh"), atomically: false, encoding: .utf8)
-            try "* * * * * root /bin/sh /private/var/db/nodeex-firstboot.sh\n".write(to: data.appendingPathComponent("private/etc/crontab"), atomically: false, encoding: .utf8)
+            try firstRunScript.write(to: data.appendingPathComponent("private/var/db/nvto-firstboot.sh"), atomically: false, encoding: .utf8)
+            try "* * * * * root /bin/sh /private/var/db/nvto-firstboot.sh\n".write(to: data.appendingPathComponent("private/etc/crontab"), atomically: false, encoding: .utf8)
             return true
         }
     }
@@ -229,7 +229,7 @@ public enum Provisioning {
             if inContainer, line.contains("(Data)"), let name = line.split(separator: " ").dropLast().last { volume = String(name) }
         }
         guard let volume else { throw Failure(description: "the disk has no data volume") }
-        let mountPoint = FileManager.default.temporaryDirectory.appendingPathComponent("nodeex-guest-\(UUID().uuidString)")
+        let mountPoint = FileManager.default.temporaryDirectory.appendingPathComponent("nvto-guest-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: mountPoint) }
         try run("/usr/sbin/diskutil", ["mount", "-mountPoint", mountPoint.path, volume])

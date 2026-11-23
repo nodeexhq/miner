@@ -1,5 +1,5 @@
 import XCTest
-@testable import MinerKit
+@testable import NodeKit
 
 /// Serves a fixed payload and honours Range requests unless told not to.
 final class RangeProtocol: URLProtocol {

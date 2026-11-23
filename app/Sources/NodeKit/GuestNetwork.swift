@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-/// The network of one virtual machine, run by the nodeex-vmnet helper.
+/// The network of one virtual machine, run by the nvto-vmnet helper.
 ///
 /// The machine's network device is one end of a datagram socket pair; the
 /// helper holds the other end and is the only way in or out. That is what
@@ -34,7 +34,7 @@ public final class GuestNetwork: @unchecked Sendable {
         process.arguments = ["-mac", macAddress, "-ssh-listen", "127.0.0.1:\(sshPort)", "-vnc-listen", "127.0.0.1:\(vncPort)", "-limits", limits.path]
         // The helper asks the platform for this Mac's public address, to
         // refuse it to the machine; the same platform the app talks to.
-        if let api = ProcessInfo.processInfo.environment["NODEEX_API"], !api.isEmpty {
+        if let api = ProcessInfo.processInfo.environment["NVTO_API"], !api.isEmpty {
             process.arguments! += ["-api", api]
         }
         process.standardInput = helperEnd
@@ -116,11 +116,11 @@ public final class GuestNetwork: @unchecked Sendable {
     /// The helper shipped with the app, or beside the running program.
     public static func helper() -> URL? {
         let fm = FileManager.default
-        if let override = ProcessInfo.processInfo.environment["NODEEX_VMNET_BIN"], fm.isExecutableFile(atPath: override) { return URL(fileURLWithPath: override) }
+        if let override = ProcessInfo.processInfo.environment["NVTO_VMNET_BIN"], fm.isExecutableFile(atPath: override) { return URL(fileURLWithPath: override) }
         let candidates = [
-            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/nodeex-vmnet"),
-            Bundle.main.bundleURL.appendingPathComponent("nodeex-vmnet"),
-            URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("nodeex-vmnet"),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/nvto-vmnet"),
+            Bundle.main.bundleURL.appendingPathComponent("nvto-vmnet"),
+            URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().appendingPathComponent("nvto-vmnet"),
         ]
         return candidates.first { fm.isExecutableFile(atPath: $0.path) }
     }

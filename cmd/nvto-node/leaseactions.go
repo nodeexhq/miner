@@ -23,7 +23,7 @@ import (
 //	            or flooding from the owner's address; the platform ends the
 //	            lease (POST /v1/nodes/{id}/abuse)
 //	stop-lease  the owner's emergency stop; the renter is refunded the
-//	            period and mining is switched off (POST /v1/nodes/{id}/stop-lease)
+//	            period and hosting is switched off (POST /v1/nodes/{id}/stop-lease)
 //
 // Each prints the platform's reply as one JSON line on standard output. The
 // exit status tells the app what happened.
@@ -85,7 +85,7 @@ type stopLeaseReply struct {
 	LeaseID     string     `json:"lease_id"`
 	EndedAt     time.Time  `json:"ended_at"`
 	Refunded    string     `json:"refunded"`
-	Mining      bool       `json:"mining"`
+	Hosting     bool       `json:"hosting"`
 	PausedUntil *time.Time `json:"paused_until,omitempty"`
 }
 

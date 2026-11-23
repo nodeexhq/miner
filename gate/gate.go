@@ -1,12 +1,12 @@
-// Package gate is the handshake that guards every connection a Miner
+// Package gate is the handshake that guards every connection a node
 // forwards into a leased machine. Connect opens a stream, sends one line
-// naming the service and carrying a lease token, and the Miner answers
+// naming the service and carrying a lease token, and the node answers
 // before any payload flows:
 //
-//	C: NODEEX1 <service> <token>\n
+//	C: NVTO1 <service> <token>\n
 //	S: OK\n            (or)  ERR <reason>\n
 //
-// The overlay network's ACL only decides who can reach the Miner at all;
+// The overlay network's ACL only decides who can reach the node at all;
 // this handshake is what ties a connection to a paid, current lease.
 //
 // One service is not a lease's: "test", the connection test a renter runs
@@ -23,12 +23,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nodeexhq/miner/leasetoken"
-	"github.com/nodeexhq/miner/pretest"
+	"github.com/nvtohq/node/leasetoken"
+	"github.com/nvtohq/node/pretest"
 )
 
 const (
-	magic            = "NODEEX1"
+	magic            = "NVTO1"
 	maxPreamble      = 2048
 	handshakeTimeout = 10 * time.Second
 )
@@ -40,12 +40,12 @@ var (
 	ErrIssuedAt = errors.New("gate: test token issued in the future")
 )
 
-// issuedSkew is how far ahead of the Miner's clock a test token's issue
+// issuedSkew is how far ahead of the node's clock a test token's issue
 // time may be. Without a bound, a token issued "later" would outlive the
 // five minutes a test token may live.
 const issuedSkew = time.Minute
 
-// Refused is returned by Dial when the Miner rejects the handshake.
+// Refused is returned by Dial when the node rejects the handshake.
 type Refused struct{ Reason string }
 
 func (e *Refused) Error() string { return "gate: refused: " + e.Reason }
@@ -73,7 +73,7 @@ func Dial(conn net.Conn, service, token string) error {
 	return ErrProtocol
 }
 
-// Verifier is the Miner's view of what it may currently serve.
+// Verifier is the node's view of what it may currently serve.
 type Verifier struct {
 	PlatformKey ed25519.PublicKey
 	NodeID      string
@@ -96,7 +96,7 @@ type Admitted struct {
 	At time.Time
 }
 
-// Accept performs the Miner side of the handshake. It returns what it
+// Accept performs the node side of the handshake. It returns what it
 // admitted, or an error after telling the client it was refused.
 func (v Verifier) Accept(conn net.Conn) (Admitted, error) {
 	conn.SetDeadline(time.Now().Add(handshakeTimeout))

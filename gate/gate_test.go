@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nodeexhq/miner/leasetoken"
+	"github.com/nvtohq/node/leasetoken"
 )
 
 type fixture struct {
@@ -105,10 +105,10 @@ func TestAcceptRejectsMalformedPreambles(t *testing.T) {
 	f := newFixture()
 	for name, preamble := range map[string]string{
 		"wrong magic":   "HELLO ssh tok\n",
-		"too few parts": "NODEEX1 ssh\n",
-		"extra parts":   "NODEEX1 ssh tok extra\n",
+		"too few parts": "NVTO1 ssh\n",
+		"extra parts":   "NVTO1 ssh tok extra\n",
 		"ssh banner":    "SSH-2.0-OpenSSH_9.9\r\n",
-		"oversized":     "NODEEX1 ssh " + strings.Repeat("a", maxPreamble) + "\n",
+		"oversized":     "NVTO1 ssh " + strings.Repeat("a", maxPreamble) + "\n",
 	} {
 		c, s := net.Pipe()
 		// A pipe is unbuffered, so read the reply concurrently with writing.

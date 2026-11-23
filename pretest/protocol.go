@@ -4,7 +4,7 @@
 //
 // The test is admitted by the gate handshake (service "test", with a test
 // token from the platform; see leasetoken.VerifyTest) and is served by the
-// Miner process itself. It never reaches the rented machine, and it is
+// node process itself. It never reaches the rented machine, and it is
 // refused while a lease is active on the node, so it cannot disturb a
 // renter.
 //
@@ -32,7 +32,7 @@
 //
 // # Phases
 //
-// The phases run once each, in this order. The Miner closes the connection
+// The phases run once each, in this order. The node closes the connection
 // the test's max_seconds (clamped) after it sent OK, sending ERR 3 if it can.
 //
 // P, ping. The client sends PING and waits for its PONG, one at a time, at

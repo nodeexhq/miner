@@ -103,7 +103,7 @@ public final class MachineController: LeaseMachine {
 
     public convenience init(store: VMStore = .standard, resources: VMResources = .forThisHost()) throws {
         // A renter's machine is never started on the unfiltered network.
-        guard let helper = GuestNetwork.helper() else { throw VMError.unsupportedHost("the nodeex-vmnet helper is missing") }
+        guard let helper = GuestNetwork.helper() else { throw VMError.unsupportedHost("the nvto-vmnet helper is missing") }
         self.init(store: store, resources: resources) { bundle, resources, onNetworkExit in
             guard let mac = try? String(contentsOf: bundle.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
                 throw VMError.damagedBundle("MAC address")

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nodeexhq/miner/internal/devicesig"
+	"github.com/nvtohq/node/internal/devicesig"
 )
 
 // platform is a fake API that checks each request's device signature and
@@ -87,7 +87,7 @@ func TestAbuseRequest(t *testing.T) {
 	if err != nil || req != (abuseRequest{"lease-1", "port_scan", "more than 64 ports of 10.0.0.9 in 60 s"}) {
 		t.Errorf("%+v %v", req, err)
 	}
-	if _, err := newAbuseRequest("lease-1", "mining", ""); exitCode(err) != 2 {
+	if _, err := newAbuseRequest("lease-1", "spam", ""); exitCode(err) != 2 {
 		t.Errorf("unknown reason: %v", err)
 	}
 	if _, err := newAbuseRequest("", "fan_out", ""); exitCode(err) != 2 {
@@ -202,9 +202,9 @@ func TestReportAbuseGivesUp(t *testing.T) {
 }
 
 func TestStopLease(t *testing.T) {
-	p, post := newPlatform(t, reply{200, `{"lease_id":"lease-1","ended_at":"2026-11-21T10:00:00Z","refunded":"12.50","mining":false,"paused_until":"2026-11-28T10:00:00Z"}`})
+	p, post := newPlatform(t, reply{200, `{"lease_id":"lease-1","ended_at":"2026-11-21T10:00:00Z","refunded":"12.50","hosting":false,"paused_until":"2026-11-28T10:00:00Z"}`})
 	got, err := stopLease(context.Background(), post, "node-1", "lease-1", "  the renter is using it for something I do not allow  ")
-	if err != nil || got.Refunded != "12.50" || got.Mining || got.PausedUntil == nil {
+	if err != nil || got.Refunded != "12.50" || got.Hosting || got.PausedUntil == nil {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if r := p.got[0]; r.path != "/v1/nodes/node-1/stop-lease" || r.body["lease_id"] != "lease-1" ||
@@ -213,7 +213,7 @@ func TestStopLease(t *testing.T) {
 	}
 	// The reply is printed for the app as one JSON line.
 	b, _ := json.Marshal(got)
-	if !strings.Contains(string(b), `"refunded":"12.50"`) || !strings.Contains(string(b), `"mining":false`) {
+	if !strings.Contains(string(b), `"refunded":"12.50"`) || !strings.Contains(string(b), `"hosting":false`) {
 		t.Errorf("printed %s", b)
 	}
 

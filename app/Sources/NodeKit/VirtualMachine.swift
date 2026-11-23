@@ -18,12 +18,12 @@ public struct VMStore: Sendable {
     }
 
     public static var standard: VMStore {
-        // NODEEX_VM_DIR keeps a test away from the machines this Mac serves.
-        if let dir = ProcessInfo.processInfo.environment["NODEEX_VM_DIR"], !dir.isEmpty {
+        // NVTO_VM_DIR keeps a test away from the machines this Mac serves.
+        if let dir = ProcessInfo.processInfo.environment["NVTO_VM_DIR"], !dir.isEmpty {
             return VMStore(root: URL(fileURLWithPath: dir, isDirectory: true))
         }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return VMStore(root: support.appendingPathComponent("NodeEx/Machines", isDirectory: true))
+        return VMStore(root: support.appendingPathComponent("NVTO/Machines", isDirectory: true))
     }
 
     public var base: VMBundle { VMBundle(directory: root.appendingPathComponent("base", isDirectory: true)) }
@@ -163,10 +163,10 @@ public struct VMResources: Sendable {
         let mem = max(VZVirtualMachineConfiguration.minimumAllowedMemorySize, min(VZVirtualMachineConfiguration.maximumAllowedMemorySize, memory > 8 * gb ? memory - 4 * gb : memory / 2))
         var resources = VMResources(cpuCount: cpu, memoryBytes: mem, diskBytes: diskGB * gb)
         // On a Mac that is also somebody's workstation, give the machine
-        // less than everything: NODEEX_VM_CPUS and NODEEX_VM_MEMORY_GB.
+        // less than everything: NVTO_VM_CPUS and NVTO_VM_MEMORY_GB.
         let env = ProcessInfo.processInfo.environment
-        if let cpus = env["NODEEX_VM_CPUS"].flatMap(Int.init), cpus >= 1 { resources.cpuCount = min(cpus, cpu) }
-        if let limit = env["NODEEX_VM_MEMORY_GB"].flatMap(UInt64.init), limit >= 4 { resources.memoryBytes = min(limit * gb, mem) }
+        if let cpus = env["NVTO_VM_CPUS"].flatMap(Int.init), cpus >= 1 { resources.cpuCount = min(cpus, cpu) }
+        if let limit = env["NVTO_VM_MEMORY_GB"].flatMap(UInt64.init), limit >= 4 { resources.memoryBytes = min(limit * gb, mem) }
         return resources
     }
 }

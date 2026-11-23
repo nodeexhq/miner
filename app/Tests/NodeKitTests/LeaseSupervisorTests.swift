@@ -1,5 +1,5 @@
 import XCTest
-@testable import MinerKit
+@testable import NodeKit
 
 /// Tests exercise power/network effects without booting a VM or touching the
 /// owner's real machines. The same coordinator drives MachineController.

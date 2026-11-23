@@ -1,6 +1,6 @@
 #!/bin/sh
 # Regenerates Resources/AppIcon.icns. Usage: make-icon.sh [TILE-HEX]
-# The Miner's tile is graphite; Connect's is the brand blue (#2E6FE0).
+# NVTO Node's tile is graphite; Connect's is the brand blue (#2E6FE0).
 set -eu
 APP_DIR=$(cd "$(dirname "$0")/.." && pwd)
 COLOR="${1:-#2B3038}"

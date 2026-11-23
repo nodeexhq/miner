@@ -15,22 +15,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nodeexhq/miner/gate"
-	"github.com/nodeexhq/miner/leasetoken"
-	"github.com/nodeexhq/miner/overlay"
-	"github.com/nodeexhq/miner/pretest"
-	"github.com/nodeexhq/miner/tunnel"
+	"github.com/nvtohq/node/gate"
+	"github.com/nvtohq/node/leasetoken"
+	"github.com/nvtohq/node/overlay"
+	"github.com/nvtohq/node/pretest"
+	"github.com/nvtohq/node/tunnel"
 	"tailscale.com/tsnet"
 )
 
-// leaseState is what the Miner currently knows about its lease, plus every
+// leaseState is what the node currently knows about its lease, plus every
 // connection it is carrying for it.
 type leaseState struct {
 	mu     sync.Mutex
 	id     string
 	endsAt time.Time
 	conns  map[net.Conn]struct{}
-	// suspended is set while the Miner is cut off from the platform. No
+	// suspended is set while the node is cut off from the platform. No
 	// lease is served until the platform is heard from again.
 	suspended bool
 	// test is the connection test being served, if any. It is cut the
@@ -73,7 +73,7 @@ func (a *activeConn) Write(b []byte) (int, error) {
 }
 
 // snapshot reports how many connections carried data within activeWithin
-// and whether the gate is suspended, for the Miner's status report.
+// and whether the gate is suspended, for the node's status report.
 func (s *leaseState) snapshot() (sessions int, suspended bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,8 +99,8 @@ func (s *leaseState) suspend() bool {
 	return true
 }
 
-// endGrace is how long past a lease's known end time the Miner keeps serving
-// it. A renewal reaches the Miner on its next heartbeat, and the two clocks
+// endGrace is how long past a lease's known end time the node keeps serving
+// it. A renewal reaches the node on its next heartbeat, and the two clocks
 // are never exactly in step; without this margin a renter whose lease was
 // renewed at the last moment would be cut off for nothing. When the platform
 // says the lease is over, access stops at once regardless.
@@ -110,7 +110,7 @@ func (s *leaseState) expired(now time.Time) bool {
 	return !now.Before(s.endsAt.Add(endGrace))
 }
 
-// current returns the lease the Miner may serve right now. The lease's end
+// current returns the lease the node may serve right now. The lease's end
 // time is enforced locally, so access stops even if the platform is
 // unreachable.
 func (s *leaseState) current() string {
@@ -180,7 +180,7 @@ func (s *leaseState) untrack(conn net.Conn) {
 	delete(s.conns, conn)
 }
 
-// leased reports whether the Miner knows of a lease on this node, served or
+// leased reports whether the agent knows of a lease on this node, served or
 // not (suspended, or in its grace period): no connection test then.
 func (s *leaseState) leased() bool {
 	s.mu.Lock()
@@ -218,10 +218,10 @@ type overlayKey struct {
 	GatePort   int    `json:"gate_port"`
 }
 
-// joinOverlay brings the Miner onto the overlay network. A join key is
+// joinOverlay brings the node onto the overlay network. A join key is
 // requested from the platform only the first time. After that the identity
 // in the state directory is reused, together with the settings saved beside
-// it, so restarting a Miner does not mint another key.
+// it, so restarting a node does not mint another key.
 func joinOverlay(ctx context.Context, id identity, priv ed25519.PrivateKey, dir string) (*tsnet.Server, overlayKey, error) {
 	stateDir := filepath.Join(dir, "overlay")
 	settingsPath := filepath.Join(dir, "overlay.json")
@@ -251,7 +251,7 @@ func joinOverlay(ctx context.Context, id identity, priv ed25519.PrivateKey, dir 
 	return srv, key, nil
 }
 
-// overlayAddr returns the Miner's own IPv4 address on the overlay.
+// overlayAddr returns the node's own IPv4 address on the overlay.
 func overlayAddr(ctx context.Context, srv *tsnet.Server) (string, error) {
 	lc, err := srv.LocalClient()
 	if err != nil {
@@ -271,7 +271,7 @@ func overlayAddr(ctx context.Context, srv *tsnet.Server) (string, error) {
 
 // serveGate accepts overlay connections, admits those holding a token for
 // the current lease, and forwards them to the leased machine's services.
-// Connection tests (tests may be nil: none) are served by the Miner itself.
+// Connection tests (tests may be nil: none) are served by the node itself.
 func serveGate(ctx context.Context, ln net.Listener, id identity, state *leaseState, targets map[string]string, tests *pretest.Guard) error {
 	platformKey, err := base64.StdEncoding.DecodeString(id.PlatformKey)
 	if err != nil || len(platformKey) != ed25519.PublicKeySize {
@@ -333,7 +333,7 @@ func serveGate(ctx context.Context, ln net.Listener, id identity, state *leaseSt
 	}
 }
 
-// serveTest runs an admitted connection test. It is the Miner's own
+// serveTest runs an admitted connection test. It is the node's own
 // traffic, never the rented machine's, and is cut if a lease starts.
 func serveTest(conn net.Conn, a gate.Admitted, state *leaseState) {
 	c := a.Claims

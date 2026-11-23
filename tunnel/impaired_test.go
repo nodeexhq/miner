@@ -387,15 +387,15 @@ func TestImpaired(t *testing.T) {
 
 	url := startImpairedNet(t)
 	a, aIP := startNodeOnPort(t, ctx, url, "connect", portA)
-	b, bIP := startNodeOnPort(t, ctx, url, "miner", portB)
+	b, bIP := startNodeOnPort(t, ctx, url, "node", portB)
 	t.Logf("link each way: %.0f Mbit/s, %v delay, %.1f%% loss, %.1f%% reordered",
 		spec.rate/1e6, spec.delay, spec.loss*100, spec.reorder*100)
 	// The path must be the relay's stand-in for the peer, never DERP.
 	if ep := awaitDirect(t, ctx, a, bIP); ep != r.sockB.LocalAddr().String() {
-		t.Fatalf("connect reaches miner at %s, not through the relay", ep)
+		t.Fatalf("connect reaches node at %s, not through the relay", ep)
 	}
 	if ep := awaitDirect(t, ctx, b, aIP); ep != r.sockA.LocalAddr().String() {
-		t.Fatalf("miner reaches connect at %s, not through the relay", ep)
+		t.Fatalf("node reaches connect at %s, not through the relay", ep)
 	}
 
 	run := func(label string, from *tsnet.Server, toIP string, to *tsnet.Server, port, flows int) {
@@ -421,17 +421,17 @@ func TestImpaired(t *testing.T) {
 		t.Logf("%-28s %6.1f Mbit/s  (relay: %d lost, %d queue drops)", label, rate,
 			r.toA.dropped.Load()+r.toB.dropped.Load()-lost, r.toA.overflow.Load()+r.toB.overflow.Load()-queued)
 	}
-	run("miner -> connect, 1 flow", b, aIP, a, 7100, 1)
-	run("connect -> miner, 1 flow", a, bIP, b, 7101, 1)
-	run("miner -> connect, 4 flows", b, aIP, a, 7102, 4)
+	run("node -> connect, 1 flow", b, aIP, a, 7100, 1)
+	run("connect -> node, 1 flow", a, bIP, b, 7101, 1)
+	run("node -> connect, 4 flows", b, aIP, a, 7102, 4)
 	t.Logf("relay to connect: %s", r.toA.stats())
-	t.Logf("relay to miner:   %s", r.toB.stats())
+	t.Logf("relay to node:    %s", r.toB.stats())
 }
 
 // tuneNode applies netstack settings under trial on top of tsnet's own,
 // before the node makes any connection: TUNE_CC (reno or cubic),
 // TUNE_RACK (on or off), TUNE_RCVBUF and TUNE_SNDBUF (MiB) and
-// TUNE_MINRTO. With none set the node runs exactly as the Miner and
+// TUNE_MINRTO. With none set the test node runs exactly as nvto-node and
 // Connect do.
 func tuneNode(t *testing.T, s *tsnet.Server) {
 	ns, ok := s.Sys().Netstack.Get().(*netstack.Impl)

@@ -1,14 +1,14 @@
 import AppKit
-import MinerKit
+import NodeKit
 import Virtualization
 
-// nodeex-vm prepares and tests the virtual machine from a terminal.
+// nvto-vm prepares and tests the virtual machine from a terminal.
 //
-//   nodeex-vm status           what is on disk
-//   nodeex-vm install          download macOS and install the base machine
-//   nodeex-vm setup            boot the base in a window, for first-run setup
-//   nodeex-vm provision        let the host log in to the base and use sudo there
-//   nodeex-vm run              boot a fresh copy of the base and print its address
+//   nvto-vm status           what is on disk
+//   nvto-vm install          download macOS and install the base machine
+//   nvto-vm setup            boot the base in a window, for first-run setup
+//   nvto-vm provision        let the host log in to the base and use sudo there
+//   nvto-vm run              boot a fresh copy of the base and print its address
 //
 // The program must be signed with the com.apple.security.virtualization
 // entitlement (scripts/bundle.sh does it).
@@ -93,7 +93,7 @@ func main() async {
             let image = try await VMInstaller.restoreImage(store: store, progress: percent("downloading macOS"))
             print("installing macOS \(image.operatingSystemVersion.majorVersion).\(image.operatingSystemVersion.minorVersion) (build \(image.buildVersion))")
             try await VMInstaller.install(image: image, into: store.base, resources: sized, progress: percent("installing"))
-            print("installed. Next: nodeex-vm setup")
+            print("installed. Next: nvto-vm setup")
             exit(0)
         case "provision":
             let account = try Provisioning.prepareBase(store: store)
@@ -127,13 +127,13 @@ func main() async {
             let endpoint = try await runner.sshEndpoint()
             print("ssh: \(endpoint.host) port \(endpoint.port)\(network == nil ? " (system NAT)" : " (filtered network)")")
             if let at = CommandLine.arguments.firstIndex(of: "--authorize"), CommandLine.arguments.count > at + 1, let account = Provisioning.account(store: store) {
-                // nodeex-vm run --authorize FILE: let the public keys in FILE log in, as a renter's would.
+                // nvto-vm run --authorize FILE: let the public keys in FILE log in, as a renter's would.
                 let keys = try String(contentsOfFile: CommandLine.arguments[at + 1], encoding: .utf8).split(separator: "\n").map(String.init)
                 try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
                 print("authorized \(keys.count) key(s) for \(account)")
             }
             if let at = CommandLine.arguments.firstIndex(of: "--exec"), CommandLine.arguments.count > at + 2 {
-                // nodeex-vm run --exec ACCOUNT COMMAND: run a command in the guest and stop.
+                // nvto-vm run --exec ACCOUNT COMMAND: run a command in the guest and stop.
                 let output = try Provisioning.guest(CommandLine.arguments[at + 2], at: endpoint, account: CommandLine.arguments[at + 1], store: store)
                 print(output, terminator: "")
                 await runner.stop()
@@ -141,7 +141,7 @@ func main() async {
             }
             if CommandLine.arguments.contains("--window") { showWindow(for: runner, title: "NVTO machine") }
         default:
-            fail("usage: nodeex-vm <status|install|setup|provision|run [--nat] [--window] [--exec ACCOUNT COMMAND]>")
+            fail("usage: nvto-vm <status|install|setup|provision|run [--nat] [--window] [--exec ACCOUNT COMMAND]>")
         }
     } catch {
         fail("\(error)")

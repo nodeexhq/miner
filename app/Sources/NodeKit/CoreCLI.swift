@@ -33,8 +33,8 @@ public struct CoreCLI: Sendable {
             }
             let text = errors.isEmpty ? output : errors
             let last = text.split(separator: "\n").last.map(String.init) ?? ""
-            // "nodeex-miner: ..." is how the core prefixes its errors.
-            return last.hasPrefix("nodeex-miner: ") ? String(last.dropFirst("nodeex-miner: ".count)) : last
+            // "nvto-node: ..." is how the core prefixes its errors.
+            return last.hasPrefix("nvto-node: ") ? String(last.dropFirst("nvto-node: ".count)) : last
         }
     }
 
@@ -71,7 +71,7 @@ public struct CoreCLI: Sendable {
         run(["stop-lease", "-lease", lease, "-reason", reason])
     }
 
-    /// Enrolls this Mac with a one-time code from the mining dashboard.
+    /// Enrolls this Mac with a one-time code from the hosting dashboard.
     public func enroll(code: String, api: String, force: Bool = false) -> Result {
         run(["enroll", "-api", api, "-token", code.trimmingCharacters(in: .whitespacesAndNewlines)] + (force ? ["-force"] : []))
     }

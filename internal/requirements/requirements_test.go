@@ -3,7 +3,7 @@ package requirements
 import (
 	"testing"
 
-	"github.com/nodeexhq/miner/internal/hostspec"
+	"github.com/nvtohq/node/internal/hostspec"
 )
 
 func TestCheck(t *testing.T) {

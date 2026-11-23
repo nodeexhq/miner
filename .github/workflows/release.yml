@@ -1,7 +1,7 @@
 name: release
 
 # Pushing a tag such as v0.2.0 builds, signs, notarizes and publishes
-# everything owners download: the command-line Miner and the macOS app, with
+# everything owners download: the command-line nvto-node and the NVTO Node app, with
 # the app's update feed pointed at the new version. Nothing is done by hand.
 #
 # The signing material is in the organization's secrets:
@@ -44,14 +44,14 @@ jobs:
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: echo "SIGN_IDENTITY=$(scripts/ci-signing.sh)" >> "$GITHUB_ENV"
 
-      - name: Command-line Miner
+      - name: Command-line nvto-node
         run: |
-          mkdir -p dist/nodeex-miner
+          mkdir -p dist/nvto-node
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=$TAG" \
-            -o dist/nodeex-miner/nodeex-miner ./cmd/nodeex-miner
-          scripts/sign-binary.sh dist/nodeex-miner/nodeex-miner
-          cp LICENSE README.md dist/nodeex-miner/
-          tar -C dist -czf "dist/nodeex-miner_${TAG}_macos_arm64.tar.gz" nodeex-miner
+            -o dist/nvto-node/nvto-node ./cmd/nvto-node
+          scripts/sign-binary.sh dist/nvto-node/nvto-node
+          cp LICENSE README.md dist/nvto-node/
+          tar -C dist -czf "dist/nvto-node_${TAG}_macos_arm64.tar.gz" nvto-node
           (cd dist && shasum -a 256 *.tar.gz > SHA256SUMS)
 
       - name: The app
@@ -59,12 +59,12 @@ jobs:
 
       - name: Publish
         run: |
-          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NVTO Miner $TAG" \
-            --notes "The command-line Miner and the NVTO Miner app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NVTO Node $TAG" \
+            --notes "The command-line nvto-node and the NVTO Node app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
 
       - name: The app, for a test build
         if: ${{ contains(github.ref_name, '-') }}
-        run: gh release upload "$TAG" app/dist/NVTO-Miner-"$TAG".dmg --clobber
+        run: gh release upload "$TAG" app/dist/NVTO-Node-"$TAG".dmg --clobber
 
       - name: Update feed
         # A test build (a tag with a suffix, such as v0.1.16-test.1) is published
@@ -77,12 +77,12 @@ jobs:
           SPARKLE_KEY_FILE="$RUNNER_TEMP/sparkle.key" app/scripts/publish.sh "$TAG"
           rm -f "$RUNNER_TEMP/sparkle.key"
           # Installed apps read the feed from the main branch.
-          cp app/appcast.xml "$RUNNER_TEMP/appcast.xml"
+          cp app/feed.xml "$RUNNER_TEMP/feed.xml"
           git fetch -q origin main
           git checkout -q -f -B main origin/main
-          cp "$RUNNER_TEMP/appcast.xml" app/appcast.xml
+          cp "$RUNNER_TEMP/feed.xml" app/feed.xml
           git config user.name "NVTO"
           git config user.email "hello@nvto.com"
-          git add app/appcast.xml
+          git add app/feed.xml
           git commit -q -m "Update feed: $TAG"
           git push -q origin main
