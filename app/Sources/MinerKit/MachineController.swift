@@ -156,7 +156,7 @@ public final class MachineController: LeaseMachine {
     private func barred(_ lease: String) -> Bool { AbuseRecord.load(store)?.lease == lease }
 
     private func refuseBarred(_ lease: String) async {
-        NSLog("NodeEx machine: lease %@ was cut off for abuse; no machine for it", lease)
+        NSLog("NVTO machine: lease %@ was cut off for abuse; no machine for it", lease)
         await powerOff()
         state = .failed("cut off the network for abuse; the lease is being ended")
     }
@@ -178,7 +178,7 @@ public final class MachineController: LeaseMachine {
         running = true
         state = .ready(sshPort: sshPortInUse)
         failures = 0
-        NSLog("NodeEx machine: resumed for lease %@", authorizedLeaseID ?? "?")
+        NSLog("NVTO machine: resumed for lease %@", authorizedLeaseID ?? "?")
         applyKeys()
         return true
     }
@@ -238,12 +238,12 @@ public final class MachineController: LeaseMachine {
                 Task { @MainActor in
                     guard let self, self.runnerBoot == boot else { return }
                     let lease = self.store.currentLease
-                    NSLog("NodeEx machine: network cut for abuse%@: %@ (%@)", lease.map { " in lease \($0)" } ?? "", abuse.reason, abuse.detail)
+                    NSLog("NVTO machine: network cut for abuse%@: %@ (%@)", lease.map { " in lease \($0)" } ?? "", abuse.reason, abuse.detail)
                     self.networkAbuse = abuse
                     guard let lease, AbuseRecord.load(self.store)?.lease != lease else { return }
                     let record = AbuseRecord(lease: lease, reason: abuse.reason, detail: abuse.detail, time: abuse.time)
                     do { try record.save(self.store) } catch {
-                        NSLog("NodeEx machine: could not record the abuse: %@", "\(error)")
+                        NSLog("NVTO machine: could not record the abuse: %@", "\(error)")
                     }
                     self.onNetworkAbuse?(record)
                 }
@@ -258,12 +258,12 @@ public final class MachineController: LeaseMachine {
             sshPortInUse = endpoint.port
             state = .ready(sshPort: endpoint.port)
             failures = 0
-            NSLog("NodeEx machine: ready%@, SSH on 127.0.0.1:%d", store.currentLease.map { " for lease \($0)" } ?? "", endpoint.port)
+            NSLog("NVTO machine: ready%@, SSH on 127.0.0.1:%d", store.currentLease.map { " for lease \($0)" } ?? "", endpoint.port)
             applyKeys()
         } catch {
             guard generation == mine, permitted else { return }
             state = .failed("\(error)")
-            NSLog("NodeEx machine: could not be made ready: %@", "\(error)")
+            NSLog("NVTO machine: could not be made ready: %@", "\(error)")
             retry(mine)
         }
     }
@@ -285,7 +285,7 @@ public final class MachineController: LeaseMachine {
     private func retry(_ generation: Int) {
         failures += 1
         let delay = min(30.0 * pow(2.0, Double(failures - 1)), 600)
-        NSLog("NodeEx machine: retrying in %.0f s (failure %d)", delay, failures)
+        NSLog("NVTO machine: retrying in %.0f s (failure %d)", delay, failures)
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard let self, self.generation == generation, self.permitted else { return }
@@ -333,7 +333,7 @@ public final class MachineController: LeaseMachine {
                     try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
                     return true
                 } catch {
-                    NSLog("NodeEx: could not install the renter's keys: \(error)")
+                    NSLog("NVTO: could not install the renter's keys: \(error)")
                     return false
                 }
             }.value
@@ -387,12 +387,12 @@ public final class MachineController: LeaseMachine {
         }
         running = false
         state = .paused
-        NSLog("NodeEx machine: paused, waiting for lease %@ to be confirmed", lease)
+        NSLog("NVTO machine: paused, waiting for lease %@ to be confirmed", lease)
         let limit = pauseLimit
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
             guard let self, self.pauseToken == token, self.pausedLease == lease else { return }
-            NSLog("NodeEx machine: lease %@ not confirmed for %.0f minutes; powering off", lease, limit / 60)
+            NSLog("NVTO machine: lease %@ not confirmed for %.0f minutes; powering off", lease, limit / 60)
             await self.powerOff()
         }
     }
@@ -417,9 +417,9 @@ public final class MachineController: LeaseMachine {
         AbuseRecord.remove(store)
         do {
             try store.discardCurrent()
-            NSLog("NodeEx machine: the last renter's machine was destroyed")
+            NSLog("NVTO machine: the last renter's machine was destroyed")
         } catch {
-            NSLog("NodeEx machine: could not destroy the last renter's machine: %@", "\(error)")
+            NSLog("NVTO machine: could not destroy the last renter's machine: %@", "\(error)")
         }
     }
 

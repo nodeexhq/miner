@@ -18,7 +18,7 @@ protocol LeaseMachine: AnyObject {
 }
 
 /// Enforces platform authorization even when desktop traffic bypasses the
-/// NodeEx gate. Nothing boots until a fresh platform snapshot arrives. A
+/// NVTO gate. Nothing boots until a fresh platform snapshot arrives. A
 /// core crash, stale heartbeat, or the exact lease deadline cuts the guest's
 /// network immediately and stops it; only a fresh confirmation may resume it.
 @MainActor

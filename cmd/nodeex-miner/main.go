@@ -212,7 +212,7 @@ func printCheck(h hostspec.HostSpecs) bool {
 	fmt.Println("this machine:", describe(h))
 	failed := requirements.Check(h)
 	if len(failed) == 0 {
-		fmt.Println("meets the minimum requirements to be a NodeEx node")
+		fmt.Println("meets the minimum requirements to be an NVTO node")
 		return true
 	}
 	fmt.Println("does NOT meet the minimum requirements:")

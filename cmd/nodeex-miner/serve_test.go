@@ -119,7 +119,7 @@ func TestAnswered(t *testing.T) {
 		"edge error page, platform down": {&statusError{Status: 530, msg: "HTTP 530"}, true},
 		"wrapped status error":           {fmt.Errorf("heartbeat: %w", &statusError{Status: 502, msg: "HTTP 502"}), true},
 		"could not connect":              {&net.OpError{Op: "dial", Err: errors.New("connection refused")}, false},
-		"name did not resolve":           {&net.DNSError{Err: "no such host", Name: "app.nodeex.com"}, false},
+		"name did not resolve":           {&net.DNSError{Err: "no such host", Name: "app.nvto.com"}, false},
 		"timed out":                      {context.DeadlineExceeded, false},
 		"certificate not trusted":        {errors.New("x509: certificate signed by unknown authority"), false},
 	}

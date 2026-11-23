@@ -1,6 +1,6 @@
-# NodeEx Miner
+# NVTO Miner
 
-The node-side agent of [NodeEx](https://nodeex.com), a network of dedicated Apple-silicon Macs that are rented whole,
+The node-side agent of [NVTO](https://nvto.com), a network of dedicated Apple-silicon Macs that are rented whole,
 one renter at a time. The Miner runs on the Mac you contribute: it checks the hardware, enrolls the machine with the
 platform, reports that it is online, and lets a renter in only while they hold a lease on it.
 
@@ -9,7 +9,7 @@ return: a node earns only when it is rented.
 
 ## Status
 
-Early access. The Miner is a command-line program, and the NodeEx Miner app, which sets up the machine and updates
+Early access. The Miner is a command-line program, and the NVTO Miner app, which sets up the machine and updates
 itself, is in testing. Release builds are signed with a Developer ID and notarized by Apple, so macOS runs them
 without a warning; the first run needs a network connection for that check.
 
@@ -33,15 +33,15 @@ go build -o nodeex-miner ./cmd/nodeex-miner
 
 ```sh
 nodeex-miner check                                   # does this Mac qualify?
-nodeex-miner enroll -api https://app.nodeex.com -token CODE
+nodeex-miner enroll -api https://app.nvto.com -token CODE
 nodeex-miner run                                     # stay online
 nodeex-miner service install                         # or: run at login, restart on failure
 nodeex-miner status
 ```
 
-The enroll code comes from the mining dashboard at [app.nodeex.com](https://app.nodeex.com). Every command and flag is
-described in the [Miner reference](https://nodeex.com/docs/reference/miner-cli), and the steps from an empty Mac to a
-node in service in the [quick start](https://nodeex.com/docs/miners/quickstart).
+The enroll code comes from the mining dashboard at [app.nvto.com](https://app.nvto.com). Every command and flag is
+described in the [Miner reference](https://nvto.com/docs/reference/miner-cli), and the steps from an empty Mac to a
+node in service in the [quick start](https://nvto.com/docs/miners/quickstart).
 
 ## What it does on your Mac
 
@@ -108,7 +108,7 @@ JSON lines; that is how the app follows the Miner.
 
 The macOS app controls the guest's power and its only network connection on the host. Jump Desktop, UU Remote,
 and other services installed **inside the renter's VM** therefore follow the same lease even when they bypass
-the NodeEx SSH/VNC gate. This does not manage remote access installed on the host. Prepare the base without
+the NVTO SSH/VNC gate. This does not manage remote access installed on the host. Prepare the base without
 renter accounts, initialized Jump/UU device identities, or remote-access pairing: install/register those agents
 inside each renter's guest so a new disk cannot inherit an earlier device identity or unattended password.
 
@@ -159,12 +159,12 @@ owner's VM or exercise third-party desktop clients.
 | `app/` | The macOS menu-bar app and virtual machines (Swift, in development) |
 | `vmnet/` | The network of a renter's machine and its outbound rules (Go, a module of its own) |
 
-[NodeEx Connect](https://github.com/nodeexhq/connect), the renter's client, uses the first four.
+[NVTO Connect](https://github.com/nodeexhq/connect), the renter's client, uses the first four.
 
 ## Security
 
-Official builds are published only on this repository's releases page and on https://nodeex.com/download. They are
-signed with NodeEx's Developer ID (team ID `7GS265YM4T`) and notarized by Apple, and every release has a `SHA256SUMS`
+Official builds are published only on this repository's releases page and on https://nvto.com/download. They are
+signed with NVTO's Developer ID (team ID `7GS265YM4T`) and notarized by Apple, and every release has a `SHA256SUMS`
 file. Before running a build, check it:
 
 ```sh
@@ -174,7 +174,7 @@ codesign -dv NodeEx-Miner-vX.Y.Z.dmg 2>&1 | grep TeamIdentifier # TeamIdentifier
 ```
 
 A fork of this code is not an official build, whatever it is called, and cannot carry that signature. See
-[how to check a download](https://nodeex.com/security#software).
+[how to check a download](https://nvto.com/security#software).
 
 Please report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 

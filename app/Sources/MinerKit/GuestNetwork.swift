@@ -57,11 +57,11 @@ public final class GuestNetwork: @unchecked Sendable {
             let data = handle.availableData
             if data.isEmpty { handle.readabilityHandler = nil; return }
             for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
-                NSLog("NodeEx network: %@", String(line))
+                NSLog("NVTO network: %@", String(line))
             }
         }
         process.terminationHandler = { [weak self] p in
-            NSLog("NodeEx network: helper exited with status %d", p.terminationStatus)
+            NSLog("NVTO network: helper exited with status %d", p.terminationStatus)
             self?.onExit?()
         }
         try process.run()
@@ -90,7 +90,7 @@ public final class GuestNetwork: @unchecked Sendable {
         guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
               object["event"] as? String == "abuse" else { return }
         let abuse = Abuse(reason: object["reason"] as? String ?? "", detail: object["detail"] as? String ?? "", time: object["time"] as? String ?? "")
-        NSLog("NodeEx network: cut for abuse: %@: %@", abuse.reason, abuse.detail)
+        NSLog("NVTO network: cut for abuse: %@: %@", abuse.reason, abuse.detail)
         onAbuse?(abuse)
     }
 

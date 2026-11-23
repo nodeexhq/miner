@@ -102,10 +102,10 @@ public final class AbuseReporter {
             if outcome.settled {
                 current.reported = true
                 try? current.save(store)
-                NSLog("NodeEx: abuse in lease %@ reported: %@", record.lease, "\(outcome)")
+                NSLog("NVTO: abuse in lease %@ reported: %@", record.lease, "\(outcome)")
                 return
             }
-            NSLog("NodeEx: abuse in lease %@ not reported yet: %@", record.lease, "\(outcome)")
+            NSLog("NVTO: abuse in lease %@ not reported yet: %@", record.lease, "\(outcome)")
             try? await Task.sleep(nanoseconds: UInt64(retryAfter * 1_000_000_000))
             reportPending()
         }

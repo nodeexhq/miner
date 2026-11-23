@@ -24,13 +24,13 @@ fi
 gh release upload "$TAG" -R nodeexhq/miner "$DMG" "$DMG.sha256" --clobber
 cat > "$APP_DIR/appcast.xml" <<FEED
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The update feed of NodeEx Miner for macOS. Installed apps read this file
+<!-- The update feed of NVTO Miner for macOS. Installed apps read this file
      from the main branch; scripts/publish.sh rewrites it for each release.
      An item is trusted only if its signature matches the key built into
      the app, so this file alone cannot make an app install anything. -->
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>NodeEx Miner</title>
+    <title>NVTO Miner</title>
     <item>
       <title>${TAG#v}</title>
       <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>

@@ -22,7 +22,7 @@ cp -R "$DIST/NodeEx Miner.app" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 DMG="$DIST/NodeEx-Miner-$VERSION.dmg"
 [ ! -f "$DMG" ] || mv "$DMG" "$DIST/.old-$(date +%s).dmg"
-hdiutil create -quiet -volname "NodeEx Miner" -srcfolder "$STAGE" -fs HFS+ -format UDZO "$DMG"
+hdiutil create -quiet -volname "NVTO Miner" -srcfolder "$STAGE" -fs HFS+ -format UDZO "$DMG"
 codesign --force --timestamp -s "$SIGN_IDENTITY" "$DMG"
 
 echo "notarizing $(basename "$DMG")"

@@ -1,6 +1,6 @@
 import AppKit
 
-/// The NodeEx mark: a node at the centre and four arcs sweeping out to the
+/// The NVTO mark: a node at the centre and four arcs sweeping out to the
 /// machines it connects. The eight paths are copied from the site's master
 /// drawing (web/public/mark.svg, a 1024 × 1024 box); each is filled on its
 /// own, because they overlap. The same file is in the Miner and Connect apps.

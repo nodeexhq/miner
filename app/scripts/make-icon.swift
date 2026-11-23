@@ -1,4 +1,4 @@
-// Draws an app icon: the white NodeEx mark on a flat tile. Run by
+// Draws an app icon: the white NVTO mark on a flat tile. Run by
 // scripts/make-icon.sh together with Sources/*/MenuBarMark.swift (which holds
 // the mark). Arguments: OUTPUT.png TILE-HEX [avatar]. "avatar" fills the whole
 // square, for places that crop the picture themselves; otherwise it is a macOS

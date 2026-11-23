@@ -59,8 +59,8 @@ jobs:
 
       - name: Publish
         run: |
-          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NodeEx Miner $TAG" \
-            --notes "The command-line Miner and the NodeEx Miner app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NVTO Miner $TAG" \
+            --notes "The command-line Miner and the NVTO Miner app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
 
       - name: The app, for a test build
         if: ${{ contains(github.ref_name, '-') }}
@@ -81,8 +81,8 @@ jobs:
           git fetch -q origin main
           git checkout -q -f -B main origin/main
           cp "$RUNNER_TEMP/appcast.xml" app/appcast.xml
-          git config user.name "NodeEx"
-          git config user.email "hello@nodeex.com"
+          git config user.name "NVTO"
+          git config user.email "hello@nvto.com"
           git add app/appcast.xml
           git commit -q -m "Update feed: $TAG"
           git push -q origin main

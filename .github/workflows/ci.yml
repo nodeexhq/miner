@@ -19,11 +19,11 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test -count=1 ./...
-      # The Miner runs on macOS only; the packages NodeEx Connect imports
+      # The Miner runs on macOS only; the packages NVTO Connect imports
       # must keep building for every system renters use.
       - run: GOOS=darwin GOARCH=arm64 go build -o /dev/null ./cmd/nodeex-miner
       # The virtual machines' network helper is a module of its own, so that
-      # its dependencies stay out of the Miner and of NodeEx Connect.
+      # its dependencies stay out of the Miner and of NVTO Connect.
       - run: cd vmnet && test -z "$(gofmt -l .)" && go vet ./... && go test -count=1 ./... && GOOS=darwin GOARCH=arm64 go build -o /dev/null .
       - run: |
           for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do

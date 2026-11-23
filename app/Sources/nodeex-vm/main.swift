@@ -105,7 +105,7 @@ func main() async {
             runner.onStop = { _ in exit(0) }
             running.append(runner)
             try await runner.start()
-            showWindow(for: runner, title: "NodeEx base machine: finish setup, then shut it down")
+            showWindow(for: runner, title: "NVTO base machine: finish setup, then shut it down")
             print("Set up the account, turn on Remote Login and Screen Sharing, then shut the machine down from its Apple menu.")
         case "run":
             try store.resetCurrent()
@@ -139,7 +139,7 @@ func main() async {
                 await runner.stop()
                 exit(0)
             }
-            if CommandLine.arguments.contains("--window") { showWindow(for: runner, title: "NodeEx machine") }
+            if CommandLine.arguments.contains("--window") { showWindow(for: runner, title: "NVTO machine") }
         default:
             fail("usage: nodeex-vm <status|install|setup|provision|run [--nat] [--window] [--exec ACCOUNT COMMAND]>")
         }

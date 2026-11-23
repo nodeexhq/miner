@@ -443,13 +443,13 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
     public func pause() async -> Bool {
         guard stopTask == nil, startTask == nil, machine.canPause else { return false }
         do { try await machine.pause(); return true }
-        catch { NSLog("NodeEx machine: could not pause: %@", "\(error)"); return false }
+        catch { NSLog("NVTO machine: could not pause: %@", "\(error)"); return false }
     }
 
     public func resume() async -> Bool {
         guard stopTask == nil, machine.canResume else { return false }
         do { try await machine.resume(); return true }
-        catch { NSLog("NodeEx machine: could not resume: %@", "\(error)"); return false }
+        catch { NSLog("NVTO machine: could not resume: %@", "\(error)"); return false }
     }
 
     /// Cuts networking, then power. Return only once the stopped machine
@@ -470,7 +470,7 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
                 }
                 if machine.canStop {
                     do { try await machine.stop() }
-                    catch { NSLog("NodeEx machine: power-off failed, keeping network off and retrying: %@", "\(error)") }
+                    catch { NSLog("NVTO machine: power-off failed, keeping network off and retrying: %@", "\(error)") }
                 }
                 if machine.state != .stopped && machine.state != .error {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
