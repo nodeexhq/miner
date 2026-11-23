@@ -1,9 +1,10 @@
 #!/bin/sh
-# Regenerates Resources/AppIcon.icns. Usage: make-icon.sh [TILE-HEX]
-# NVTO Node's tile is graphite; Connect's is the brand blue (#2E6FE0).
+# Regenerates Resources/AppIcon.icns and Resources/avatar.png.
+# Usage: make-icon.sh [TILE], TILE one hex colour or two for a gradient.
+# Both apps use the brand gradient, the same as the website's tiles.
 set -eu
 APP_DIR=$(cd "$(dirname "$0")/.." && pwd)
-COLOR="${1:-#2B3038}"
+COLOR="${1:-#2FA8F0,#2E5FE0}"
 WORK=$(mktemp -d)
 cat "$APP_DIR"/Sources/*/MenuBarMark.swift "$APP_DIR/scripts/make-icon.swift" | grep -v '^import AppKit$' | { echo "import AppKit"; cat; } > "$WORK/main.swift"
 swiftc -O -o "$WORK/make-icon" "$WORK/main.swift"
