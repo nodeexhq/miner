@@ -6,10 +6,10 @@ import AppKit
 /// in the Miner and Connect apps.
 public enum NodeExMark {
     static let paths = [
-        "M143.1 80.9 L224 0 L692 0 L692 629.8Z",
-        "M780 0 L800 0 L1024 224 L1024 800 L943.1 880.9 L780 717.8Z",
-        "M880.9 943.1 L800 1024 L332 1024 L332 394.2Z",
-        "M244 1024 L224 1024 L0 800 L0 224 L80.9 143.1 L244 306.2Z"
+        "M170.7 53.3 L224 0 L653 0 L653 535.6Z",
+        "M819 19 L1024 224 L1024 800 L970.7 853.3 L819 701.6Z",
+        "M853.3 970.7 L800 1024 L371 1024 L371 488.4Z",
+        "M205 1005 L0 800 L0 224 L53.3 170.7 L205 322.4Z"
     ]
 
     /// Fills the mark into `rect` in the current colour. The context must be
