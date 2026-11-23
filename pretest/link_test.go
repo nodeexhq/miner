@@ -54,7 +54,12 @@ func shaped(src, dst net.Conn, oneWay time.Duration, bps float64) {
 					free = now
 				}
 				free = free.Add(time.Duration(float64(len(b)) * 8 / bps * float64(time.Second)))
-				time.Sleep(time.Until(free))
+				// Sleep only once a millisecond is owed: a sleep per small
+				// chunk overshoots by tens of microseconds on Linux, which at
+				// 200 Mbit/s halves the rate. The average rate is the same.
+				if d := time.Until(free); d > time.Millisecond {
+					time.Sleep(d)
+				}
 			}
 			queued.Add(-int64(len(b)))
 			wire <- chunk{time.Now(), b}
@@ -99,13 +104,7 @@ func TestShapedLinks(t *testing.T) {
 		{"10ms 200/100", 10 * time.Millisecond, 200e6, 100e6},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			// The shaper is goroutines and sleeps, so on a small shared CI
-			// machine the fastest line falls short of its rate when the
-			// other lines run beside it, so it runs alone (Go starts the parallel
-			// subtests only once the loop is done).
-			if c.down < 100e6 {
-				t.Parallel()
-			}
+			t.Parallel()
 			client, server := link(t, c.rtt, c.down, c.up)
 			lim := leasetoken.DefaultTestLimits()
 			start := time.Now()
