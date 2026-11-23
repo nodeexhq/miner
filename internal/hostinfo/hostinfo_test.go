@@ -2,6 +2,7 @@ package hostinfo
 
 import (
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -18,7 +19,9 @@ func TestGPUCores(t *testing.T) {
 		}
 	}
 	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
-		if h := Collect(); h.GPUCores <= 0 {
+		// A virtual Mac (such as a CI runner, model VirtualMac2,1) has no
+		// GPU of its own to count; nodes are real Macs.
+		if h := Collect(); h.GPUCores <= 0 && !strings.HasPrefix(h.Model, "VirtualMac") {
 			t.Errorf("no GPU cores read on this Mac: %+v", h)
 		}
 	}
