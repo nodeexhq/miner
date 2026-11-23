@@ -6,5 +6,13 @@
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
     <title>NVTO Node</title>
+    <item>
+      <title>0.1.18</title>
+      <pubDate>Mon, 23 Nov 2026 18:23:19 +0000</pubDate>
+      <sparkle:version>85</sparkle:version>
+      <sparkle:shortVersionString>0.1.18</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nvtohq/node/releases/download/v0.1.18/NVTO-Node-v0.1.18.dmg" type="application/octet-stream" sparkle:edSignature="mE9YPaaSH4V2nEGzmHj9WBGhTpt7WnKtiR39hYDspo58b4boxT/dNmJF6Go9FiqAeSzTJhy1zprpFZ7W3JynDA==" length="16500430" />
+    </item>
   </channel>
 </rss>
