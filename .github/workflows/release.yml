@@ -59,7 +59,10 @@ jobs:
 
       - name: Publish
         run: |
-          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS --prerelease --title "NVTO Node $TAG" \
+          # A test build (a tag with a suffix) is a pre-release and is never shown
+          # as the download; a plain tag is the release everyone gets.
+          case "$TAG" in *-*) KIND=--prerelease ;; *) KIND=--latest ;; esac
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS $KIND --title "NVTO Node $TAG" \
             --notes "The command-line nvto-node and the NVTO Node app for macOS on Apple silicon, signed with a Developer ID and notarized by Apple. Verify downloads against the checksums."
 
       - name: The app, for a test build
