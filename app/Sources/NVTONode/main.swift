@@ -60,6 +60,54 @@ final class NodeModel: ObservableObject {
     @Published var pausedUntil: Date?
     private var reporter: AbuseReporter?
 
+    /// The menu bar mark's badge: a dot while rented, a hollow ring while
+    /// the platform has yet to approve the node, plain while it is open to
+    /// renters, dimmed otherwise (off, quarantined, not working).
+    var badge: MenuBarMark.Badge {
+        if lease != nil { return .dot }
+        if coreRunning && nodeStatus == "pending" { return .ring }
+        return coreRunning && nodeStatus == "active" && gate == "open" ? .none : .dimmed
+    }
+
+    /// The first line of the menu: what state the node is in, in words an
+    /// owner can act on.
+    var statusLine: String {
+        guard coreRunning else { return "Not running" }
+        switch nodeStatus {
+        case "pending": return "Waiting for approval"
+        case "active": return gate == "open" ? "Online, open to renters" : "Online, not open to renters yet"
+        case "quarantined": return "Quarantined: takes no orders"
+        case "retired": return "Retired"
+        default: return "Connecting to the platform…"
+        }
+    }
+
+    /// A second line where the first needs explaining.
+    var statusDetail: String? {
+        guard coreRunning else { return nil }
+        switch nodeStatus {
+        case "pending": return "Automatic, about 30 minutes after setup"
+        case "quarantined": return "See the hosting dashboard"
+        case "active" where gate != "open": return "Remote access: \(gate)"
+        default: return nil
+        }
+    }
+
+    /// The core's latest log line, short enough not to widen the menu (menu
+    /// items do not wrap), without its timestamp, and left out while it only
+    /// says what the status line already does.
+    var shownLog: String? {
+        var line = lastLog.trimmingCharacters(in: .whitespaces)
+        if line.isEmpty { return nil }
+        if nodeStatus == "pending" && line.contains("node_not_approved") { return nil }
+        // Go's log prefix: "2006/01/02 15:04:05 ".
+        if line.count > 20, line.prefix(20).allSatisfy({ $0.isNumber || "/: ".contains($0) }) {
+            line = String(line.dropFirst(20))
+        }
+        let max = 60
+        return line.count > max ? String(line.prefix(max - 1)) + "…" : line
+    }
+
     private let store = VMStore.standard
     private var core: CoreSupervisor?
     private var machines: MachineController?
@@ -714,9 +762,13 @@ struct MenuContent: View {
         Text("NVTO Node \(version)")
         Divider()
         if model.phase == .running {
-            Text("Node: \(model.nodeStatus)")
-            Text(model.coreRunning ? "Core: running" : "Core: stopped")
-            Text("Remote access: \(model.gate)")
+            Text(model.statusLine)
+            if let detail = model.statusDetail {
+                Text(detail)
+            }
+            if !model.coreRunning {
+                Text("Core: stopped")
+            }
             Text("Machine: \(model.machine)")
             if let lease = model.lease {
                 Text("Rented: lease \(lease.prefix(8))" + (model.leaseEnds.map { ", until \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""))
@@ -732,9 +784,9 @@ struct MenuContent: View {
                      + (model.pausedUntil.map { "; new orders resume \($0.formatted(date: .abbreviated, time: .shortened))" } ?? "") + ".")
                     .lineLimit(3)
             }
-            if !model.lastLog.isEmpty {
+            if let log = model.shownLog {
                 Divider()
-                Text(model.lastLog).lineLimit(2)
+                Text(log)
             }
         } else {
             Text("Setup is not finished")
@@ -853,7 +905,7 @@ struct Launcher: View {
     var body: some View {
         // The NVTO mark: with a dot while rented, dimmed while the node
         // is not open to renters.
-        Image(nsImage: MenuBarMark.image(style: .tile, badge: model.lease != nil ? .dot : model.gate == "open" ? .none : .dimmed))
+        Image(nsImage: MenuBarMark.image(style: .tile, badge: model.badge))
             .onAppear {
                 model.start()
                 if model.needsWindow {

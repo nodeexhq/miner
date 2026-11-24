@@ -76,7 +76,10 @@ public enum NVTOMark {
 /// the menu bar, so they differ in shape: Connect shows the bare mark, the
 /// Node app the mark cut out of a solid tile (this Mac is a node).
 public enum MenuBarMark {
-    public enum Badge { case none, dot, dimmed }
+    /// none: working normally. dot: in use (a connection or a lease).
+    /// ring: waiting on the platform (a new node not yet approved).
+    /// dimmed: off or not working.
+    public enum Badge { case none, dot, ring, dimmed }
     public enum Style { case plain, tile }
 
     public static func image(style: Style = .plain, badge: Badge = .none, height: CGFloat = 16) -> NSImage {
@@ -106,6 +109,20 @@ public enum MenuBarMark {
                 ctx.setBlendMode(.normal)
                 ctx.setFillColor(NSColor.black.cgColor)
                 ctx.fillEllipse(in: CGRect(x: (930 - 100) * s, y: (150 - 100) * s, width: 200 * s, height: 200 * s))
+            }
+            if badge == .ring {
+                // Waiting: in the dot's place, a larger hollow ring, so the
+                // two read apart at menu bar size.
+                let s = height / 1024
+                func disc(_ r: CGFloat) -> CGRect { CGRect(x: (860 - r) * s, y: (164 - r) * s, width: 2 * r * s, height: 2 * r * s) }
+                ctx.setBlendMode(.clear)
+                ctx.fillEllipse(in: disc(250))
+                ctx.setBlendMode(.normal)
+                ctx.setFillColor(NSColor.black.cgColor)
+                ctx.fillEllipse(in: disc(185))
+                ctx.setBlendMode(.clear)
+                ctx.fillEllipse(in: disc(95))
+                ctx.setBlendMode(.normal)
             }
             return true
         }
