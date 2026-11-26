@@ -27,6 +27,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -428,6 +429,27 @@ func cmdRun(args []string) error {
 	started := time.Now()
 	lastReached := time.Now()
 	isolated := false
+	// One probe at a time. A probe the platform asks for (the heartbeat's
+	// remeasure) starts at most once per remeasureMinGap, so a request that
+	// stays set while a probe fails does not have the link measured on
+	// every heartbeat.
+	var probing atomic.Bool
+	var lastAsked time.Time
+	probe := func() {
+		if !probing.CompareAndSwap(false, true) {
+			return
+		}
+		defer probing.Store(false)
+		summary, err := runProbe(ctx, id, priv)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("speed probe skipped: %v", err)
+			}
+			return
+		}
+		log.Printf("speed probe: %s", summary)
+	}
+
 	heartbeat := func() {
 		var res heartbeatResponse
 		cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -529,23 +551,17 @@ func cmdRun(args []string) error {
 			lastKeys = joined
 			emit(event{Event: "lease_keys", Lease: lease, SSHKeys: append([]string{}, keys...)})
 		}
+		if res.Remeasure && !probing.Load() && time.Since(lastAsked) >= remeasureMinGap {
+			lastAsked = time.Now()
+			log.Printf("the platform asked for a fresh speed measurement")
+			go probe()
+		}
 		// A pending node may have been approved since the last attempt.
 		if srv == nil && ctx.Err() == nil && (changed && res.Status == "active" || time.Since(lastJoin) > gateRetryInterval) {
 			if err := openGate(); err != nil {
 				log.Printf("overlay still unavailable: %v", err)
 			}
 		}
-	}
-
-	probe := func() {
-		summary, err := runProbe(ctx, id, priv)
-		if err != nil {
-			if ctx.Err() == nil {
-				log.Printf("speed probe skipped: %v", err)
-			}
-			return
-		}
-		log.Printf("speed probe: %s", summary)
 	}
 
 	log.Printf("nvto-node %s running as node %s", version, id.NodeID)

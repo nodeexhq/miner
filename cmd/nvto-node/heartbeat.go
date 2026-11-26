@@ -18,6 +18,9 @@ type heartbeatResponse struct {
 	// What the rented machine's internet traffic may use; nil when the
 	// platform gives no limit (the line is not measured yet).
 	Bandwidth *machineBandwidth
+	// Remeasure is the platform asking for the link to be measured now
+	// rather than at the next scheduled probe.
+	Remeasure bool
 }
 
 type machineBandwidth struct {
@@ -32,6 +35,7 @@ func (r *heartbeatResponse) UnmarshalJSON(data []byte) error {
 		Status    string            `json:"status"`
 		Lease     json.RawMessage   `json:"lease"`
 		Bandwidth *machineBandwidth `json:"machine_bandwidth"`
+		Remeasure bool              `json:"remeasure"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
@@ -46,6 +50,6 @@ func (r *heartbeatResponse) UnmarshalJSON(data []byte) error {
 	if lease != nil && (lease.ID == "" || lease.EndsAt.IsZero()) {
 		return errors.New("incomplete heartbeat lease")
 	}
-	r.Status, r.Lease, r.Bandwidth = wire.Status, lease, wire.Bandwidth
+	r.Status, r.Lease, r.Bandwidth, r.Remeasure = wire.Status, lease, wire.Bandwidth, wire.Remeasure
 	return nil
 }

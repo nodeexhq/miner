@@ -16,6 +16,9 @@ import (
 // probeInterval is how often the node has the platform re-measure its link.
 const probeInterval = 6 * time.Hour
 
+// remeasureMinGap is the least time between probes the platform asks for.
+const remeasureMinGap = 15 * time.Minute
+
 // probeTimeout bounds each direction of a probe. A link too slow to move
 // the payload in this time goes unmeasured.
 const probeTimeout = 75 * time.Second
