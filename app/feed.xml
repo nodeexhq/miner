@@ -7,12 +7,12 @@
   <channel>
     <title>NVTO Node</title>
     <item>
-      <title>0.1.19</title>
-      <pubDate>Mon, 23 Nov 2026 20:14:45 +0000</pubDate>
-      <sparkle:version>87</sparkle:version>
-      <sparkle:shortVersionString>0.1.19</sparkle:shortVersionString>
+      <title>0.1.20</title>
+      <pubDate>Thu, 26 Nov 2026 16:26:50 +0000</pubDate>
+      <sparkle:version>94</sparkle:version>
+      <sparkle:shortVersionString>0.1.20</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/nvtohq/node/releases/download/v0.1.19/NVTO-Node-v0.1.19.dmg" type="application/octet-stream" sparkle:edSignature="RTOyqmVw6fGwXYtNGByX58Nj0KrkqjU16s5Vr7RSpaz137J0k4K1KmmqfQHkHtjGA/dfvlQzGIyjo3J+RFgZDw==" length="17246137" />
+      <enclosure url="https://github.com/nvtohq/node/releases/download/v0.1.20/NVTO-Node-v0.1.20.dmg" type="application/octet-stream" sparkle:edSignature="sIwVNnwhSWXDxpyi2v11mAMtgAH0LCh4sj4/r3JZzHNeh0wi8iPI3pvdY2VY5OE1+yYumHOTeVkzRR4NkPVJDA==" length="17249186" />
     </item>
   </channel>
 </rss>
