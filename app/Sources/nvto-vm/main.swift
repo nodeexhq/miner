@@ -9,6 +9,7 @@ import Virtualization
 //   nvto-vm setup            boot the base in a window, for first-run setup
 //   nvto-vm provision        let the host log in to the base and use sudo there
 //   nvto-vm run              boot a fresh copy of the base and print its address
+//                            (--host-vnc: serve its screen from the host)
 //
 // The program must be signed with the com.apple.security.virtualization
 // entitlement (scripts/bundle.sh does it).
@@ -111,12 +112,17 @@ func main() async {
             try store.resetCurrent()
             // On the filtered network when the helper is there, as a
             // renter's machine always is; --nat asks for the system's NAT.
+            // --host-vnc serves the machine's screen from the host, on the
+            // remote desktop port, as a renter's machine gets it.
+            let desktop = CommandLine.arguments.contains("--host-vnc") ? try MachineController.hostDesktop(for: store.current) : nil
+            if CommandLine.arguments.contains("--host-vnc"), desktop == nil { fail("\(HostDesktop.unavailableReason ?? "the host's VNC server is not available")") }
             var network: GuestNetwork?
             if !CommandLine.arguments.contains("--nat"), let helper = GuestNetwork.helper() {
                 let mac = try String(contentsOf: store.current.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-                network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: MachineController.sshPort, vncPort: MachineController.vncPort, limits: MachineController.bandwidthFile(store))
+                network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: MachineController.sshPort, vncPort: desktop == nil ? MachineController.vncPort : nil,
+                                           guestDesktopPort: desktop == nil ? nil : MachineController.guestDesktopPort, limits: MachineController.bandwidthFile(store))
             }
-            let runner = try VMRunner(bundle: store.current, resources: resources, network: network)
+            let runner = try VMRunner(bundle: store.current, resources: resources, network: network, desktop: desktop)
             runner.onStop = { error in
                 print("machine stopped\(error.map { ": \($0.localizedDescription)" } ?? "")")
                 exit(0)
@@ -126,6 +132,10 @@ func main() async {
             print("started a fresh copy of the base; waiting for its address")
             let endpoint = try await runner.sshEndpoint()
             print("ssh: \(endpoint.host) port \(endpoint.port)\(network == nil ? " (system NAT)" : " (filtered network)")")
+            if desktop != nil {
+                // The password stays in its file; it is not printed.
+                print("remote desktop: vnc://127.0.0.1:\(MachineController.vncPort), served by the host; password in \(store.current.desktopPassword.path)")
+            }
             if let at = CommandLine.arguments.firstIndex(of: "--authorize"), CommandLine.arguments.count > at + 1, let account = Provisioning.account(store: store) {
                 // nvto-vm run --authorize FILE: let the public keys in FILE log in, as a renter's would.
                 let keys = try String(contentsOfFile: CommandLine.arguments[at + 1], encoding: .utf8).split(separator: "\n").map(String.init)
@@ -141,7 +151,7 @@ func main() async {
             }
             if CommandLine.arguments.contains("--window") { showWindow(for: runner, title: "NVTO machine") }
         default:
-            fail("usage: nvto-vm <status|install|setup|provision|run [--nat] [--window] [--exec ACCOUNT COMMAND]>")
+            fail("usage: nvto-vm <status|install|setup|provision|run [--nat] [--window] [--host-vnc] [--exec ACCOUNT COMMAND]>")
         }
     } catch {
         fail("\(error)")

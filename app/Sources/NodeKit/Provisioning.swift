@@ -295,6 +295,29 @@ public enum Provisioning {
         try guest(script, at: endpoint, account: account, store: store, input: keys)
     }
 
+    /// Where the renter's account finds the password of the remote desktop
+    /// the host serves (HostDesktop), relative to its home. Connect reads it
+    /// over SSH with the renter's key, as it sets the account's password.
+    public static let desktopPasswordFile = ".nvto/desktop-password"
+
+    /// Puts the host desktop's password where only the renter's account
+    /// (and the guest's administrators, which the renter is) can read it.
+    /// It travels on standard input, never on a command line, and is not
+    /// logged. The renter's account must exist (authorize makes it).
+    public static func shareDesktopPassword(_ password: String, at endpoint: VMRunner.Endpoint, account: String, store: VMStore) throws {
+        let user = renterAccount
+        let dir = "/Users/\(user)/" + (desktopPasswordFile as NSString).deletingLastPathComponent
+        let script = """
+        set -e
+        sudo -n /usr/bin/install -d -o \(user) -g staff -m 700 \(dir)
+        sudo -n /usr/bin/touch /Users/\(user)/\(desktopPasswordFile)
+        sudo -n /usr/sbin/chown \(user):staff /Users/\(user)/\(desktopPasswordFile)
+        sudo -n /bin/chmod 600 /Users/\(user)/\(desktopPasswordFile)
+        sudo -n /usr/bin/tee /Users/\(user)/\(desktopPasswordFile) >/dev/null
+        """
+        try guest(script, at: endpoint, account: account, store: store, input: password + "\n")
+    }
+
     /// Settings for a new renter account that spare the remote desktop's
     /// bandwidth: renters often connect over slow or lossy lines, and a
     /// machine for development does not need animations or a screen saver.

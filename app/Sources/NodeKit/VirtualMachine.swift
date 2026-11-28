@@ -75,6 +75,8 @@ public struct VMStore: Sendable {
         guard base.exists else { throw VMError.noBaseImage }
         if fm.fileExists(atPath: current.directory.path) { try fm.removeItem(at: current.directory) }
         try fm.copyItem(at: base.directory, to: current.directory)
+        // Each lease's machine gets its own remote desktop password.
+        try? fm.removeItem(at: current.desktopPassword)
     }
 }
 
@@ -86,6 +88,9 @@ public struct VMBundle: Sendable {
     public var hardwareModel: URL { directory.appendingPathComponent("hardware-model") }
     public var machineIdentifier: URL { directory.appendingPathComponent("machine-identifier") }
     public var macAddress: URL { directory.appendingPathComponent("mac-address") }
+    /// The password of the machine's remote desktop when the host serves
+    /// it (HostDesktop); made for each lease's machine.
+    public var desktopPassword: URL { directory.appendingPathComponent("desktop-password") }
 
     public var exists: Bool { FileManager.default.fileExists(atPath: disk.path) }
 }
@@ -418,13 +423,24 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
 
     /// The machine's filtered network, if it has one.
     public let network: GuestNetwork?
+    /// The remote desktop the host serves for the machine, if it does
+    /// (HostDesktop); otherwise renters reach the guest's own Screen Sharing.
+    public let desktop: HostDesktop.Config?
+    private var hostDesktop: HostDesktop?
+    /// Whether the host desktop should be up: the machine runs and its
+    /// network is not held.
+    private var desktopWanted = false
+    /// Set while the machine's network is held: no desktop until released.
+    var desktopHeld = false
+    private var desktopTask: Task<Void, Never>?
     private var startTask: Task<Void, Error>?
     private var stopTask: Task<Void, Never>?
 
-    public init(bundle: VMBundle, resources: VMResources, display: Bool = true, network: GuestNetwork? = nil) throws {
+    public init(bundle: VMBundle, resources: VMResources, display: Bool = true, network: GuestNetwork? = nil, desktop: HostDesktop.Config? = nil) throws {
         self.bundle = bundle
         self.network = network
-        machine = VZVirtualMachine(configuration: try VMConfiguration.make(bundle: bundle, resources: resources, display: display, network: network))
+        self.desktop = desktop
+        machine = VZVirtualMachine(configuration: try VMConfiguration.make(bundle: bundle, resources: resources, display: display || desktop != nil, network: network))
         super.init()
         machine.delegate = self
     }
@@ -435,6 +451,38 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
         startTask = start
         defer { startTask = nil }
         try await start.value
+        openDesktop()
+    }
+
+    /// Starts the host's remote desktop if the machine should have one and
+    /// it is not up. A failure is logged and leaves the machine without a
+    /// remote desktop; SSH is unaffected.
+    func openDesktop() {
+        guard let desktop, stopTask == nil, !desktopHeld else { return }
+        desktopWanted = true
+        guard hostDesktop == nil, desktopTask == nil else { return }
+        desktopTask = Task {
+            defer { desktopTask = nil }
+            do {
+                let served = try await HostDesktop.start(desktop, machine: machine)
+                if desktopWanted, !desktopHeld, stopTask == nil {
+                    hostDesktop = served
+                    NSLog("NVTO machine: remote desktop served by the host on 127.0.0.1:%d", served.port)
+                } else {
+                    served.stop()
+                }
+            } catch {
+                NSLog("NVTO machine: no remote desktop: %@", "\(error)")
+            }
+        }
+    }
+
+    /// Stops the host's remote desktop, cutting off whoever is connected:
+    /// when the lease is not confirmed, as the held network cuts SSH.
+    func closeDesktop() {
+        desktopWanted = false
+        hostDesktop?.stop()
+        hostDesktop = nil
     }
 
     /// Freezes the machine with its memory, for a lease that may be
@@ -448,7 +496,7 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
 
     public func resume() async -> Bool {
         guard stopTask == nil, machine.canResume else { return false }
-        do { try await machine.resume(); return true }
+        do { try await machine.resume(); openDesktop(); return true }
         catch { NSLog("NVTO machine: could not resume: %@", "\(error)"); return false }
     }
 
@@ -456,6 +504,7 @@ public final class VMRunner: NSObject, VZVirtualMachineDelegate {
     /// has released its disk, so the caller can safely replace it.
     public func stop() async {
         network?.stop()
+        closeDesktop()
         if let stopTask { await stopTask.value; return }
         let starting = startTask
         let stop = Task {

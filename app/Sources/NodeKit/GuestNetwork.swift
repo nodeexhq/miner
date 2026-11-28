@@ -10,13 +10,21 @@ import Network
 public final class GuestNetwork: @unchecked Sendable {
     /// The end the virtual machine's network device is attached to.
     public let machineEnd: FileHandle
-    /// Loopback ports on the host that lead to the machine.
+    /// Loopback ports on the host that lead to the machine. vncPort is nil
+    /// when the host serves the machine's remote desktop itself
+    /// (HostDesktop) and nothing is forwarded to the guest's.
     public let sshPort: UInt16
-    public let vncPort: UInt16
+    public let vncPort: UInt16?
 
     private let process = Process()
 
-    public init(helper: URL, macAddress: String, sshPort: UInt16, vncPort: UInt16, limits: URL) throws {
+    /// guestDesktopPort, if given, opens that port on the machine's gateway
+    /// to the host's remote desktop at 127.0.0.1:hostDesktopPort, for the
+    /// guest itself (a desktop carried inside the renter's SSH). Only the
+    /// machine is on that network; nothing on the host or the owner's
+    /// network can reach it.
+    public init(helper: URL, macAddress: String, sshPort: UInt16, vncPort: UInt16?, guestDesktopPort: UInt16? = nil,
+                hostDesktopPort: UInt16 = MachineController.vncPort, limits: URL) throws {
         self.sshPort = sshPort
         self.vncPort = vncPort
         var fds: [Int32] = [0, 0]
@@ -31,7 +39,10 @@ public final class GuestNetwork: @unchecked Sendable {
         machineEnd = FileHandle(fileDescriptor: fds[0], closeOnDealloc: true)
         let helperEnd = FileHandle(fileDescriptor: fds[1], closeOnDealloc: true)
         process.executableURL = helper
-        process.arguments = ["-mac", macAddress, "-ssh-listen", "127.0.0.1:\(sshPort)", "-vnc-listen", "127.0.0.1:\(vncPort)", "-limits", limits.path]
+        process.arguments = ["-mac", macAddress, "-ssh-listen", "127.0.0.1:\(sshPort)", "-vnc-listen", vncPort.map { "127.0.0.1:\($0)" } ?? "", "-limits", limits.path]
+        if let guestDesktopPort {
+            process.arguments! += ["-guest-desktop-port", String(guestDesktopPort), "-guest-desktop-target", "127.0.0.1:\(hostDesktopPort)"]
+        }
         // The helper asks the platform for this Mac's public address, to
         // refuse it to the machine; the same platform the app talks to.
         if let api = ProcessInfo.processInfo.environment["NVTO_API"], !api.isEmpty {

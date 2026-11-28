@@ -16,17 +16,24 @@ protocol VMRuntime: AnyObject {
     func sshEndpoint(timeout: TimeInterval) async throws -> VMRunner.Endpoint
     /// Calls handler if the machine's network is cut for abuse.
     func observeNetworkAbuse(_ handler: @escaping @Sendable (GuestNetwork.Abuse) -> Void)
+    /// The password of the remote desktop the host serves for the machine,
+    /// or nil if the guest serves its own.
+    var desktopPassword: String? { get }
 }
 
 extension VMRuntime {
     func observeNetworkAbuse(_ handler: @escaping @Sendable (GuestNetwork.Abuse) -> Void) {}
+    var desktopPassword: String? { nil }
 }
 
 extension VMRunner: VMRuntime {
-    func disconnect() { network?.stop() }
-    func holdNetwork() { network?.hold() }
-    func releaseNetwork() { network?.release() }
+    // The host's remote desktop does not pass through the machine's
+    // network, so it is closed and opened with it.
+    func disconnect() { network?.stop(); closeDesktop() }
+    func holdNetwork() { network?.hold(); desktopHeld = true; closeDesktop() }
+    func releaseNetwork() { network?.release(); desktopHeld = false; openDesktop() }
     func observeNetworkAbuse(_ handler: @escaping @Sendable (GuestNetwork.Abuse) -> Void) { network?.onAbuse = handler }
+    var desktopPassword: String? { desktop?.password }
 }
 
 /// Keeps one fresh virtual machine ready for a renter, keeps it (disk and
@@ -51,7 +58,25 @@ public final class MachineController: LeaseMachine {
     /// Loopback ports the Go core forwards renters to; the controller points
     /// them at whichever machine is current.
     public static let sshPort: UInt16 = 22022
-    public static let vncPort: UInt16 = 25900
+    public nonisolated static let vncPort: UInt16 = 25900
+
+    /// The port on the machine's gateway (192.168.127.1) where the guest
+    /// itself reaches the host's remote desktop, for a browser desktop
+    /// carried inside the renter's SSH; nil keeps it closed. Set with
+    /// NVTO_GUEST_DESKTOP_PORT while this is a prototype.
+    public nonisolated static var guestDesktopPort: UInt16? {
+        ProcessInfo.processInfo.environment["NVTO_GUEST_DESKTOP_PORT"].flatMap(UInt16.init).flatMap { $0 == 0 ? nil : $0 }
+    }
+
+    /// The host's remote desktop for the machine in bundle, or nil when
+    /// this macOS cannot serve it (the reason is logged once per machine).
+    public nonisolated static func hostDesktop(for bundle: VMBundle) throws -> HostDesktop.Config? {
+        if let why = HostDesktop.unavailableReason {
+            NSLog("NVTO machine: remote desktop left to the guest's Screen Sharing: %@", why)
+            return nil
+        }
+        return HostDesktop.Config(port: vncPort, password: try HostDesktop.password(for: bundle))
+    }
 
     public private(set) var state: State = .noBase {
         didSet { if state != oldValue { onChange?(state) } }
@@ -108,9 +133,15 @@ public final class MachineController: LeaseMachine {
             guard let mac = try? String(contentsOf: bundle.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) else {
                 throw VMError.damagedBundle("MAC address")
             }
-            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort, limits: Self.bandwidthFile(store))
+            // The renter's remote desktop is served by the host when this
+            // macOS has the server, on the port the gate sends renters to;
+            // the network then leaves that port alone. Otherwise the
+            // network forwards it to the guest's own Screen Sharing.
+            let desktop = try Self.hostDesktop(for: bundle)
+            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: desktop == nil ? Self.vncPort : nil,
+                                           guestDesktopPort: desktop == nil ? nil : Self.guestDesktopPort, limits: Self.bandwidthFile(store))
             network.onExit = onNetworkExit
-            return try VMRunner(bundle: bundle, resources: resources, network: network)
+            return try VMRunner(bundle: bundle, resources: resources, network: network, desktop: desktop)
         }
     }
 
@@ -326,11 +357,15 @@ public final class MachineController: LeaseMachine {
               let account = Provisioning.account(store: store) else { return }
         let endpoint = VMRunner.Endpoint(host: "127.0.0.1", port: port)
         let keys = wantedKeys, store = store
+        let desktopPassword = runner?.desktopPassword
         let mine = generation
         keyTask = Task {
             let succeeded = await Task.detached {
                 do {
                     try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
+                    if let desktopPassword {
+                        try Provisioning.shareDesktopPassword(desktopPassword, at: endpoint, account: account, store: store)
+                    }
                     return true
                 } catch {
                     NSLog("NVTO: could not install the renter's keys: \(error)")
