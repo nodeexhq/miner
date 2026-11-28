@@ -140,7 +140,11 @@ func main() async {
                 // nvto-vm run --authorize FILE: let the public keys in FILE log in, as a renter's would.
                 let keys = try String(contentsOfFile: CommandLine.arguments[at + 1], encoding: .utf8).split(separator: "\n").map(String.init)
                 try Provisioning.authorize(renterKeys: keys, at: endpoint, account: account, store: store)
-                print("authorized \(keys.count) key(s) for \(account)")
+                // As a node does: the renter's account learns the desktop's password.
+                if let password = desktop?.password {
+                    try Provisioning.shareDesktopPassword(password, at: endpoint, account: account, store: store)
+                }
+                print("authorized \(keys.count) key(s) for \(Provisioning.renterAccount)")
             }
             if let at = CommandLine.arguments.firstIndex(of: "--exec"), CommandLine.arguments.count > at + 2 {
                 // nvto-vm run --exec ACCOUNT COMMAND: run a command in the guest and stop.

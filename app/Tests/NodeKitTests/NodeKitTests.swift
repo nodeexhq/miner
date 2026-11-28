@@ -102,6 +102,55 @@ final class ProvisioningTests: XCTestCase {
         XCTAssertFalse(Provisioning.isPublicKey("ssh-dss AAAAB3NzaC1kc3M="))
         XCTAssertFalse(Provisioning.isPublicKey(""))
     }
+
+    /// The obfuscation loginwindow reads: the password's bytes and a zero,
+    /// padded with zeros to twelve, XORed with the fixed key.
+    func testKCPassword() {
+        // "password": 8 bytes, a zero and three of padding.
+        XCTAssertEqual(Provisioning.kcpassword("password").map { String(format: "%02x", $0) }.joined(), "0de82150a5d3af8ea3b91f7d")
+        // A password of exactly twelve characters still ends with a zero,
+        // so it takes a second block.
+        XCTAssertEqual(Provisioning.kcpassword("abcdefghjkmn").count, 24)
+        // The account's passwords are 23 characters: with the zero, 24 bytes.
+        XCTAssertEqual(Provisioning.kcpassword(Provisioning.newAccountPassword()).count, 24)
+    }
+
+    func testAccountPasswordIsTypeable() {
+        let p = Provisioning.newAccountPassword()
+        XCTAssertEqual(p.count, 23)
+        XCTAssertEqual(p.split(separator: "-").map(\.count), [5, 5, 5, 5])
+        XCTAssertTrue(p.allSatisfy { "abcdefghjkmnpqrstuvwxyz23456789-".contains($0) })
+        XCTAssertNotEqual(p, Provisioning.newAccountPassword())
+    }
+
+    /// The renter's account logs itself in, has its password where Connect
+    /// reads it, and skips Setup Assistant; the password reaches the script
+    /// on standard input only.
+    func testRenterAccountScript() throws {
+        let s = Provisioning.renterAccountScript
+        for step in ["IFS= read -r p", "IFS= read -r kc", "sysadminctl -addUser renter", "base64 -D",
+                     "autoLoginUser renter", "-m 600 /dev/null /Users/renter/.nvto/account-password",
+                     "-m 600 /dev/null /etc/kcpassword", "DidSeeCloudSetup -bool true", "LastSeenBuddyBuildVersion -string \"$b\"",
+                     "echo made", "find /Users/Shared/NVTO -maxdepth 1 -name '*.pkg'"] {
+            XCTAssertTrue(s.contains(step), step)
+        }
+        // Both lines are read before the early exit, so ssh's input is always taken.
+        let read = try XCTUnwrap(s.range(of: "read -r kc")), exits = try XCTUnwrap(s.range(of: "exit 0"))
+        XCTAssertTrue(read.lowerBound < exits.lowerBound)
+        XCTAssertFalse(s.contains("set -x"))
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("renter-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try s.write(to: file, atomically: true, encoding: .utf8)
+        // ssh runs it with the guest account's shell, which is zsh.
+        for shell in ["/bin/sh", "/bin/zsh"] {
+            let sh = Process()
+            sh.executableURL = URL(fileURLWithPath: shell)
+            sh.arguments = ["-n", file.path]
+            try sh.run()
+            sh.waitUntilExit()
+            XCTAssertEqual(sh.terminationStatus, 0, shell)
+        }
+    }
 }
 
 final class CoreCLITests: XCTestCase {

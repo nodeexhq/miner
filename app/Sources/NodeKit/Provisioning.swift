@@ -257,20 +257,18 @@ public enum Provisioning {
     /// creating the renter's account the first time. An empty list leaves
     /// the account with no keys: only the host can log in.
     ///
-    /// The account starts with a random password nobody keeps. A new
-    /// account's password can be reset by an administrator, which is how
-    /// the renter's own client gives it one for remote desktop.
+    /// A new account logs itself in (see makeRenterAccount), and the
+    /// machine's user space is restarted once for that before the keys go
+    /// in, so the renter never meets the login window and their client
+    /// never finds the machine restarting under it.
     public static func authorize(renterKeys: [String], at endpoint: VMRunner.Endpoint, account: String, store: VMStore) throws {
+        if try makeRenterAccount(at: endpoint, account: account, store: store) {
+            startRenterSession(at: endpoint, account: account, store: store)
+        }
         let keys = renterKeys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter(isPublicKey).joined(separator: "\n") + "\n"
         let user = renterAccount
         let script = """
         set -e
-        new=
-        if ! /usr/bin/id \(user) >/dev/null 2>&1; then
-          sudo -n /usr/sbin/sysadminctl -addUser \(user) -fullName Renter -admin -password "$(/usr/bin/openssl rand -base64 24)" >/dev/null 2>&1
-          \(lowBandwidthDefaults(user))
-          new=1
-        fi
         for g in \(accessLists); do
           if /usr/sbin/dseditgroup -o read $g >/dev/null 2>&1; then sudo -n /usr/sbin/dseditgroup -o edit -a \(user) -t user $g; fi
         done
@@ -279,25 +277,145 @@ public enum Provisioning {
         sudo -n /usr/sbin/chown -R \(user):staff /Users/\(user)/.ssh
         sudo -n /bin/chmod 700 /Users/\(user)/.ssh
         sudo -n /bin/chmod 600 /Users/\(user)/.ssh/authorized_keys
-        # The remote desktops kept in the base are installed for a new
-        # renter, once the keys are in: a few seconds each. (Started in the
-        # background they died with this session and were never installed.)
-        if [ -n "$new" ]; then
-          for p in \(installersDirectory)/*.pkg; do
-            if [ -f "$p" ]; then sudo -n /usr/sbin/installer -pkg "$p" -target / >/dev/null 2>&1 || true; fi
-          done
-          # The login window came up before this account existed and, with
-          # the host's account hidden, asks for a name. Started again it
-          # shows the renter's account. Nobody is logged in yet.
-          if ! /usr/bin/pgrep -x Finder >/dev/null 2>&1; then sudo -n /usr/bin/killall loginwindow >/dev/null 2>&1 || true; fi
-        fi
         """
         try guest(script, at: endpoint, account: account, store: store, input: keys)
     }
 
+    /// Where the renter's account finds its own password, relative to its
+    /// home. Connect reads it over SSH with the renter's key and shows it
+    /// as the account's password: the desktop does not ask for it (the
+    /// account logs itself in), but System Settings and installers do, and
+    /// so does the login window if the renter logs out.
+    public static let accountPasswordFile = ".nvto/account-password"
+
+    /// Makes the renter's account if the machine does not have it yet, and
+    /// returns whether it did. Nothing about an existing account changes.
+    ///
+    /// The account gets a password made here, which the machine keeps in
+    /// two places only: the account's own ~/.nvto/account-password, for
+    /// Connect, and /etc/kcpassword, the obfuscated copy the login window
+    /// needs to log the account in by itself at startup (FileVault is off
+    /// in these machines; with it on, macOS ignores automatic login). The
+    /// host keeps no copy. Both are readable by the guest's administrators,
+    /// which the host is: the password guards nothing against the host, as
+    /// the account itself does not. `sysadminctl -autologin set` would do
+    /// the same, but fails on macOS 26 (SACSetAutoLoginPassword error 22),
+    /// so the file is written directly. It travels on standard input.
+    static func makeRenterAccount(at endpoint: VMRunner.Endpoint, account: String, store: VMStore) throws -> Bool {
+        let password = newAccountPassword()
+        let input = password + "\n" + kcpassword(password).base64EncodedString() + "\n"
+        return try guest(renterAccountScript, at: endpoint, account: account, store: store, input: input).contains("made")
+    }
+
+    /// What makeRenterAccount runs in the guest. It reads the password and
+    /// the kcpassword contents (base64) from standard input, one line each,
+    /// and prints "made" once it made the account.
+    static var renterAccountScript: String {
+        let user = renterAccount
+        return """
+        set -e
+        IFS= read -r p
+        IFS= read -r kc
+        if /usr/bin/id \(user) >/dev/null 2>&1; then exit 0; fi
+        sudo -n /usr/sbin/sysadminctl -addUser \(user) -fullName Renter -admin -password "$p" >/dev/null 2>&1
+        /usr/bin/id \(user) >/dev/null
+        \(lowBandwidthDefaults(user))
+        \(setupAssistantDefaults(user))
+        sudo -n /usr/bin/install -d -o \(user) -g staff -m 700 /Users/\(user)/.nvto
+        sudo -n /usr/bin/install -o \(user) -g staff -m 600 /dev/null /Users/\(user)/\(accountPasswordFile)
+        printf '%s\\n' "$p" | sudo -n /usr/bin/tee /Users/\(user)/\(accountPasswordFile) >/dev/null
+        sudo -n /usr/bin/install -o root -g wheel -m 600 /dev/null /etc/kcpassword
+        printf '%s' "$kc" | /usr/bin/base64 -D | sudo -n /usr/bin/tee /etc/kcpassword >/dev/null
+        sudo -n /usr/bin/defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser \(user)
+        # The remote desktops kept in the base are installed for a new
+        # renter: a few seconds each. (Started in the background they died
+        # with this session and were never installed.) They are found with
+        # find, not a pattern: the account's shell is zsh, which stops at a
+        # pattern that matches nothing, as when the base has no installers.
+        for pkg in $(/usr/bin/find \(installersDirectory) -maxdepth 1 -name '*.pkg' 2>/dev/null); do
+          if [ -f "$pkg" ]; then sudo -n /usr/sbin/installer -pkg "$pkg" -target / >/dev/null 2>&1 || true; fi
+        done
+        echo made
+        """
+    }
+
+    /// Logs the new renter account in. The login window came up before the
+    /// account existed, and reads the automatic login only when it first
+    /// starts: restarting the login window alone does not do it (tried on
+    /// macOS 26.6), a restart of the machine's user space does, in about
+    /// half a minute, without restarting the kernel, so the virtual
+    /// machine, its network and the host's remote desktop carry on. Nobody
+    /// is using the machine yet: the renter's keys go in afterwards. Waits
+    /// until the renter is logged in, or two minutes; if that does not
+    /// happen the renter meets the login window, and Connect gives them the
+    /// password.
+    static func startRenterSession(at endpoint: VMRunner.Endpoint, account: String, store: VMStore) {
+        let console = "/usr/bin/stat -f%Su /dev/console"
+        // The restart ends this session, so its result says nothing.
+        _ = try? guest("if [ \"$(\(console))\" = root ]; then sudo -n /bin/launchctl reboot userspace; fi", at: endpoint, account: account, store: store)
+        let deadline = Date().addingTimeInterval(120)
+        repeat {
+            Thread.sleep(forTimeInterval: 5)
+            if let user = try? guest(console, at: endpoint, account: account, store: store).trimmingCharacters(in: .whitespacesAndNewlines),
+               !user.isEmpty, user != "root" {
+                return
+            }
+        } while Date() < deadline
+        NSLog("NVTO: the renter's account did not log itself in; the renter will meet the login window")
+    }
+
+    /// A password a person can read and type, for the renter's account:
+    /// twenty characters in groups of five, without the ones easy to
+    /// confuse (as Connect made them before nodes did).
+    static func newAccountPassword() -> String {
+        let alphabet = Array("abcdefghjkmnpqrstuvwxyz23456789")
+        var out = ""
+        for i in 0..<20 {
+            if i > 0, i % 5 == 0 { out.append("-") }
+            out.append(alphabet.randomElement()!)
+        }
+        return out
+    }
+
+    /// The contents of /etc/kcpassword for a password: its bytes, ended
+    /// with a zero and padded with zeros to a multiple of twelve, XORed
+    /// with the fixed key loginwindow uses.
+    static func kcpassword(_ password: String) -> Data {
+        let key: [UInt8] = [0x7D, 0x89, 0x52, 0x23, 0xD2, 0xBC, 0xDD, 0xEA, 0xA3, 0xB9, 0x1F]
+        var bytes = Array(password.utf8) + [0]
+        if bytes.count % 12 != 0 { bytes += Array(repeating: 0, count: 12 - bytes.count % 12) }
+        return Data(bytes.enumerated().map { $0.element ^ key[$0.offset % key.count] })
+    }
+
+    /// Marks the per-account part of Setup Assistant as done for a new
+    /// account, so that logging in lands on the desktop instead of a
+    /// series of questions (accessibility, Apple Account, Siri, Screen
+    /// Time and more) the renter would have to click through. Unknown keys
+    /// are ignored by older and newer versions alike. Best effort.
+    static func setupAssistantDefaults(_ user: String) -> String {
+        let seen = [
+            "DidSeeAccessibility", "DidSeeActivationLock", "DidSeeAppStore", "DidSeeAppearanceSetup", "DidSeeApplePaySetup",
+            "DidSeeCloudSetup", "DidSeeiCloudLoginForStorageServices", "DidSeeIntelligence", "DidSeeLockdownMode", "DidSeePrivacy",
+            "DidSeeScreenTime", "DidSeeSiriSetup", "DidSeeSyncSetup", "DidSeeSyncSetup2", "DidSeeTermsOfAddress", "DidSeeTouchIDSetup",
+            "SkipFirstLoginOptimization",
+        ]
+        let versions = [
+            "LastSeenCloudProductVersion", "LastSeenDiagnosticsProductVersion", "LastSeenSiriProductVersion",
+            "LastSeenIntelligenceProductVersion", "LastSeenAgeRangeSelectionProductVersion", "LastPreLoginTasksPerformedVersion",
+        ]
+        let builds = ["LastSeenBuddyBuildVersion", "LastPreLoginTasksPerformedBuild"]
+        let write = "sudo -n -H -u \(user) /usr/bin/defaults write com.apple.SetupAssistant"
+        var lines = ["v=$(/usr/bin/sw_vers -productVersion); b=$(/usr/bin/sw_vers -buildVersion)"]
+        lines += seen.map { "\(write) \($0) -bool true >/dev/null 2>&1 || true" }
+        lines += versions.map { "\(write) \($0) -string \"$v\" >/dev/null 2>&1 || true" }
+        lines += builds.map { "\(write) \($0) -string \"$b\" >/dev/null 2>&1 || true" }
+        lines.append("\(write) LastPrivacyBundleVersion -string 2 >/dev/null 2>&1 || true")
+        return lines.joined(separator: "\n")
+    }
+
     /// Where the renter's account finds the password of the remote desktop
     /// the host serves (HostDesktop), relative to its home. Connect reads it
-    /// over SSH with the renter's key, as it sets the account's password.
+    /// over SSH with the renter's key, with the account's password.
     public static let desktopPasswordFile = ".nvto/desktop-password"
 
     /// Puts the host desktop's password where only the renter's account
