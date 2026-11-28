@@ -59,6 +59,10 @@ public final class MachineController: LeaseMachine {
     /// them at whichever machine is current.
     public static let sshPort: UInt16 = 22022
     public nonisolated static let vncPort: UInt16 = 25900
+    /// Where the host's own VNC server for the machine listens, when it
+    /// serves the remote desktop (HostDesktop). Never reached directly by
+    /// a renter: the network helper's filter on vncPort stands in front.
+    public nonisolated static let hostDesktopPort: UInt16 = 25901
 
     /// The port on the machine's gateway (192.168.127.1) where the guest
     /// itself reaches the host's remote desktop, for a browser desktop
@@ -75,7 +79,7 @@ public final class MachineController: LeaseMachine {
             NSLog("NVTO machine: remote desktop left to the guest's Screen Sharing: %@", why)
             return nil
         }
-        return HostDesktop.Config(port: vncPort, password: try HostDesktop.password(for: bundle))
+        return HostDesktop.Config(port: hostDesktopPort, password: try HostDesktop.password(for: bundle))
     }
 
     public private(set) var state: State = .noBase {
@@ -134,12 +138,12 @@ public final class MachineController: LeaseMachine {
                 throw VMError.damagedBundle("MAC address")
             }
             // The renter's remote desktop is served by the host when this
-            // macOS has the server, on the port the gate sends renters to;
-            // the network then leaves that port alone. Otherwise the
-            // network forwards it to the guest's own Screen Sharing.
+            // macOS has the server; the port the gate sends renters to then
+            // leads to it, through the network helper's filter. Otherwise
+            // it leads to the guest's own Screen Sharing.
             let desktop = try Self.hostDesktop(for: bundle)
-            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: desktop == nil ? Self.vncPort : nil,
-                                           guestDesktopPort: desktop == nil ? nil : Self.guestDesktopPort, limits: Self.bandwidthFile(store))
+            let network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: Self.sshPort, vncPort: Self.vncPort,
+                                           hostDesktopPort: desktop?.port, guestDesktopPort: Self.guestDesktopPort, limits: Self.bandwidthFile(store))
             network.onExit = onNetworkExit
             return try VMRunner(bundle: bundle, resources: resources, network: network, desktop: desktop)
         }

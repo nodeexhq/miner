@@ -14,7 +14,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/netip"
@@ -41,9 +40,9 @@ func main() {
 	signal.Notify(holds, syscall.SIGUSR1, syscall.SIGUSR2)
 	mac := flag.String("mac", "", "the machine's MAC address")
 	sshListen := flag.String("ssh-listen", "127.0.0.1:22022", "host address forwarded to the machine's SSH")
-	vncListen := flag.String("vnc-listen", "127.0.0.1:25900", "host address forwarded to the machine's remote desktop; empty when the host serves it")
-	guestDesktopPort := flag.Int("guest-desktop-port", 0, "port on the gateway where the machine reaches the host's remote desktop; 0 for none")
-	guestDesktopTarget := flag.String("guest-desktop-target", "127.0.0.1:25900", "the host's remote desktop, for -guest-desktop-port")
+	vncListen := flag.String("vnc-listen", "127.0.0.1:25900", "host address forwarded to the machine's remote desktop")
+	hostDesktop := flag.String("host-desktop", "", "the host's own VNC server for the machine; -vnc-listen then leads there instead of to the machine's")
+	guestDesktopPort := flag.Int("guest-desktop-port", 0, "port on the gateway where the machine reaches -host-desktop; 0 for none")
 	limitsFile := flag.String("limits", "", "file with the machine's bandwidth limits, written by the app")
 	api := flag.String("api", "https://app.nvto.com", "platform API, asked for the owner's public address")
 	flag.Parse()
@@ -63,15 +62,15 @@ func main() {
 	// for a moment (when the app restarts, it leaves only once it notices,
 	// within a second). Wait for them rather than fail.
 	// With the host serving the remote desktop (Virtualization's own VNC
-	// server, see HostDesktop in the app) nothing is forwarded to the
-	// machine's: the host's server holds that port itself.
-	listens := []string{*sshListen}
+	// server, see HostDesktop in the app) the remote desktop port leads to
+	// it, through the filter in rfb.go, not to the machine's.
 	forwards := map[string]string{*sshListen: guestIP + ":22"}
-	if *vncListen != "" {
-		listens = append(listens, *vncListen)
+	if *hostDesktop == "" {
 		forwards[*vncListen] = guestIP + ":5900"
+	} else if *guestDesktopPort < 0 || *guestDesktopPort > 65535 {
+		log.Fatalf("-guest-desktop-port %d", *guestDesktopPort)
 	}
-	for _, addr := range listens {
+	for _, addr := range []string{*sshListen, *vncListen} {
 		if err := waitForPort(ctx, addr, 15*time.Second); err != nil {
 			log.Fatalf("%s: %v", addr, err)
 		}
@@ -92,10 +91,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if *guestDesktopPort > 0 {
-		if *guestDesktopPort > 65535 {
-			log.Fatalf("-guest-desktop-port %d", *guestDesktopPort)
+	if *hostDesktop != "" {
+		ln, err := net.Listen("tcp", *vncListen)
+		if err != nil {
+			log.Fatalf("-vnc-listen: %v", err)
 		}
+		go serveHostDesktop(ctx, ln, *hostDesktop)
+	}
+	if *hostDesktop != "" && *guestDesktopPort > 0 {
 		// The machine itself may reach the host's remote desktop, at one
 		// port of its gateway and nowhere else on the host: a desktop in a
 		// browser is carried to it inside the renter's SSH, end to end,
@@ -107,7 +110,7 @@ func main() {
 			log.Fatalf("-guest-desktop-port: %v", err)
 		}
 		desktopGatewayPort = uint16(*guestDesktopPort)
-		go serveGuestDesktop(ctx, ln, *guestDesktopTarget)
+		go serveHostDesktop(ctx, ln, *hostDesktop)
 	}
 	// Standard output carries JSON lines for the app: this one, and one
 	// {"event":"abuse",...} if the network is cut for abuse.
@@ -171,37 +174,6 @@ func main() {
 	}
 	if f, u := guard.droppedFlows.Load(), guard.droppedUDP.Load(); f+u > 0 {
 		log.Printf("abuse limits: dropped %d new connections or flows, %d UDP packets", f, u)
-	}
-}
-
-// serveGuestDesktop joins each connection the machine makes to ln with a
-// new connection to target, the host's remote desktop, until ctx ends.
-func serveGuestDesktop(ctx context.Context, ln net.Listener, target string) {
-	go func() { <-ctx.Done(); ln.Close() }()
-	for {
-		c, err := ln.Accept()
-		if err != nil {
-			if ctx.Err() == nil {
-				log.Printf("guest desktop: %v", err)
-			}
-			return
-		}
-		go func() {
-			defer c.Close()
-			h, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", target)
-			if err != nil {
-				log.Printf("guest desktop: %v", err)
-				return
-			}
-			defer h.Close()
-			done := make(chan struct{}, 2)
-			go func() { io.Copy(h, c); done <- struct{}{} }()
-			go func() { io.Copy(c, h); done <- struct{}{} }()
-			select {
-			case <-done:
-			case <-ctx.Done():
-			}
-		}()
 	}
 }
 

@@ -119,8 +119,8 @@ func main() async {
             var network: GuestNetwork?
             if !CommandLine.arguments.contains("--nat"), let helper = GuestNetwork.helper() {
                 let mac = try String(contentsOf: store.current.macAddress, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-                network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: MachineController.sshPort, vncPort: desktop == nil ? MachineController.vncPort : nil,
-                                           guestDesktopPort: desktop == nil ? nil : MachineController.guestDesktopPort, limits: MachineController.bandwidthFile(store))
+                network = try GuestNetwork(helper: helper, macAddress: mac, sshPort: MachineController.sshPort, vncPort: MachineController.vncPort,
+                                           hostDesktopPort: desktop?.port, guestDesktopPort: MachineController.guestDesktopPort, limits: MachineController.bandwidthFile(store))
             }
             let runner = try VMRunner(bundle: store.current, resources: resources, network: network, desktop: desktop)
             runner.onStop = { error in
@@ -134,7 +134,7 @@ func main() async {
             print("ssh: \(endpoint.host) port \(endpoint.port)\(network == nil ? " (system NAT)" : " (filtered network)")")
             if desktop != nil {
                 // The password stays in its file; it is not printed.
-                print("remote desktop: vnc://127.0.0.1:\(MachineController.vncPort), served by the host; password in \(store.current.desktopPassword.path)")
+                print("remote desktop: vnc://127.0.0.1:\(MachineController.vncPort), served by the host (its own server on 127.0.0.1:\(MachineController.hostDesktopPort)); password in \(store.current.desktopPassword.path)")
             }
             if let at = CommandLine.arguments.firstIndex(of: "--authorize"), CommandLine.arguments.count > at + 1, let account = Provisioning.account(store: store) {
                 // nvto-vm run --authorize FILE: let the public keys in FILE log in, as a renter's would.

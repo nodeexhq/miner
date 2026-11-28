@@ -20,8 +20,14 @@ import Virtualization
 ///
 /// The server listens on every interface and has no option to choose one.
 /// Once it is up, its listening socket is bound to the loopback interface
-/// (IP_BOUND_IF), so only this Mac reaches it: the node's gate, as for SSH.
-/// If that cannot be done the server is stopped again.
+/// (IP_BOUND_IF), so only this Mac reaches it. If that cannot be done the
+/// server is stopped again.
+///
+/// Renters never reach it directly. A viewer that sends SetEncodings
+/// without the DesktopSize pseudo-encoding makes the server stop this whole
+/// process on an internal assertion, machine and all; so the gate's remote
+/// desktop port is the network helper's, which passes each connection on
+/// through a filter that adds it (vmnet/rfb.go).
 ///
 /// It offers only VNC authentication (RFB security type 2), whose DES
 /// challenge uses the first eight characters of the password. So the
