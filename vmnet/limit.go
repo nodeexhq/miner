@@ -147,8 +147,14 @@ func metered(frame []byte, out bool, gateway netip.Addr) bool {
 	}
 	// The gateway's DNS, and the remote desktop that reaches the machine
 	// through it, are free.
-	return peerPort != 53 && guestPort != remoteDesktopPort
+	return peerPort != 53 && guestPort != remoteDesktopPort && (desktopGatewayPort == 0 || peerPort != desktopGatewayPort)
 }
+
+// desktopGatewayPort is the gateway port where the machine reaches the
+// host's remote desktop (-guest-desktop-port), 0 when there is none. That
+// traffic stays on this Mac (and already counted once, in the SSH that
+// carries it), so it is free like the remote desktop above.
+var desktopGatewayPort uint16
 
 type limits struct {
 	UpMbps   float64 `json:"up_mbps"`
